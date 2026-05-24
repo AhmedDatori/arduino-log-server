@@ -1049,9 +1049,9 @@ app.get('/api/predictions', async (req, res) => {
     if (Date.now() - predCache.at < PRED_TTL && predCache.data) return res.json(predCache.data);
 
     const { rows } = await pool.query(`
-      SELECT soil, water, light, temp, hum, timestamp
-      FROM logs WHERE timestamp > NOW() - INTERVAL '6 hours'
-      ORDER BY timestamp ASC
+      SELECT soil, water, light, temp, hum, time
+      FROM logs WHERE time > NOW() - INTERVAL '6 hours'
+      ORDER BY time ASC
     `);
 
     if (rows.length < 3) {
@@ -1062,8 +1062,8 @@ app.get('/api/predictions', async (req, res) => {
     const soilV = extract('soil');  const waterV = extract('water');
     const lightV = extract('light'); const tempV  = extract('temp'); const humV = extract('hum');
 
-    const firstMs = new Date(rows[0].timestamp).getTime();
-    const lastMs  = new Date(rows[rows.length - 1].timestamp).getTime();
+    const firstMs = new Date(rows[0].time).getTime();
+    const lastMs  = new Date(rows[rows.length - 1].time).getTime();
     const spanH   = ((lastMs - firstMs) / 3_600_000).toFixed(1);
     const intMin  = rows.length > 1 ? ((lastMs - firstMs) / (rows.length - 1) / 60_000).toFixed(0) : '?';
     const last    = rows[rows.length - 1];
@@ -1120,8 +1120,8 @@ app.get('/api/root-cause', async (req, res) => {
     if (!force && Date.now() - rcCache.at < RC_TTL && rcCache.data) return res.json(rcCache.data);
 
     const [{ rows: healthRows }, { rows: logRows }] = await Promise.all([
-      pool.query('SELECT score, status, created_at FROM health_scores ORDER BY created_at DESC LIMIT 20'),
-      pool.query(`SELECT soil, water, light, temp, hum, timestamp FROM logs WHERE timestamp > NOW() - INTERVAL '12 hours' ORDER BY timestamp DESC LIMIT 48`),
+      pool.query('SELECT score, status, computed_at FROM health_scores ORDER BY computed_at DESC LIMIT 20'),
+      pool.query(`SELECT soil, water, light, temp, hum, time FROM logs WHERE time > NOW() - INTERVAL '12 hours' ORDER BY time DESC LIMIT 48`),
     ]);
 
     if (healthRows.length < 2 && logRows.length < 5) {
@@ -1132,7 +1132,7 @@ app.get('/api/root-cause', async (req, res) => {
     const previousScore = healthRows[1]?.score ?? 'N/A';
     const scoreDelta    = (typeof currentScore === 'number' && typeof previousScore === 'number') ? currentScore - previousScore : 0;
 
-    const scoreHistory  = healthRows.slice(0, 10).map(r => `${r.score} (${r.status}) at ${new Date(r.created_at).toLocaleTimeString()}`).join('\n  ');
+    const scoreHistory  = healthRows.slice(0, 10).map(r => `${r.score} (${r.status}) at ${new Date(r.computed_at).toLocaleTimeString()}`).join('\n  ');
     const logSummary    = logRows.slice(0, 24).map(r =>
       `soil:${r.soil ?? '—'}% water:${r.water ?? '—'} light:${r.light ?? '—'}% temp:${r.temp ?? '—'}°C hum:${r.hum ?? '—'}%`
     ).join('\n  ');
@@ -1207,11 +1207,11 @@ app.post('/api/experiments/:id/end', async (req, res) => {
     const exp = expRows[0];
 
     const { rows: logs } = await pool.query(
-      `SELECT soil, water, light, temp, hum, pump, timestamp FROM logs WHERE timestamp >= $1 ORDER BY timestamp ASC`,
+      `SELECT soil, water, light, temp, hum, time FROM logs WHERE time >= $1 ORDER BY time ASC`,
       [exp.started_at]
     );
 
-    const logSample = logs.slice(0, 60).map(r => `soil:${r.soil ?? '—'}% water:${r.water ?? '—'} pump:${r.pump ? 'ON' : 'off'}`).join('\n');
+    const logSample = logs.slice(0, 60).map(r => `soil:${r.soil ?? '—'}% water:${r.water ?? '—'} light:${r.light ?? '—'}% temp:${r.temp ?? '—'}°C`).join('\n');
 
     const prompt = `Analyze this plant watering experiment and provide results.
 
@@ -1263,31 +1263,32 @@ app.get('/api/plant-model', async (req, res) => {
     if (!force && Date.now() - modelCache.at < MODEL_TTL && modelCache.data) return res.json(modelCache.data);
 
     const { rows } = await pool.query(`
-      SELECT soil, water, light, temp, hum, pump, timestamp
-      FROM logs WHERE timestamp > NOW() - INTERVAL '7 days'
-      ORDER BY timestamp ASC
+      SELECT soil, water, light, temp, hum, time
+      FROM logs WHERE time > NOW() - INTERVAL '7 days'
+      ORDER BY time ASC
     `);
 
     if (rows.length < 20) {
       return res.json({ model: null, message: `Need more data — have ${rows.length} readings, need at least 20 (about 2-3 days of readings).` });
     }
 
-    // Drying rate: consecutive non-pump readings
+    // Drying rate: consecutive readings where soil is falling (no pump data in logs)
     const dryingRates = [];
     for (let i = 1; i < rows.length; i++) {
-      if (!rows[i - 1].pump && !rows[i].pump && rows[i - 1].soil != null && rows[i].soil != null) {
-        const dtH  = (new Date(rows[i].timestamp) - new Date(rows[i - 1].timestamp)) / 3_600_000;
+      if (rows[i - 1].soil != null && rows[i].soil != null) {
+        const dtH  = (new Date(rows[i].time) - new Date(rows[i - 1].time)) / 3_600_000;
         const drop = rows[i - 1].soil - rows[i].soil;
-        if (drop > 0 && dtH > 0 && dtH < 2) dryingRates.push(drop / dtH);
+        // Only count drops (not jumps from watering) within a reasonable window
+        if (drop > 0 && drop < 20 && dtH > 0 && dtH < 1) dryingRates.push(drop / dtH);
       }
     }
 
-    // Pump effect: soil change right after pump
-    const pumpEffects = [];
+    // Soil jumps upward = likely watering events
+    const wateringJumps = [];
     for (let i = 1; i < rows.length; i++) {
-      if (rows[i - 1].pump && rows[i].soil != null && rows[i - 1].soil != null) {
-        const change = rows[i].soil - rows[i - 1].soil;
-        if (change > 0) pumpEffects.push(change);
+      if (rows[i - 1].soil != null && rows[i].soil != null) {
+        const jump = rows[i].soil - rows[i - 1].soil;
+        if (jump > 3) wateringJumps.push(jump); // >3% jump = watering
       }
     }
 
@@ -1295,7 +1296,7 @@ app.get('/api/plant-model', async (req, res) => {
     const lightHours = {};
     rows.forEach(r => {
       if (r.light == null) return;
-      const h = new Date(r.timestamp).getHours();
+      const h = new Date(r.time).getHours();
       if (!lightHours[h]) lightHours[h] = [];
       lightHours[h].push(r.light);
     });
@@ -1303,19 +1304,21 @@ app.get('/api/plant-model', async (req, res) => {
       Object.entries(lightHours).map(([h, vs]) => [h, (vs.reduce((a, b) => a + b, 0) / vs.length).toFixed(0)])
     );
 
-    const soilVals      = rows.filter(r => r.soil  != null).map(r => r.soil);
-    const avgSoil       = soilVals.length ? (soilVals.reduce((a, b) => a + b, 0) / soilVals.length).toFixed(1) : 'N/A';
-    const avgDryRate    = dryingRates.length ? (dryingRates.reduce((a, b) => a + b, 0) / dryingRates.length).toFixed(2) : null;
-    const avgPumpEffect = pumpEffects.length ? (pumpEffects.reduce((a, b) => a + b, 0) / pumpEffects.length).toFixed(1) : null;
+    const soilVals       = rows.filter(r => r.soil  != null).map(r => r.soil);
+    const avgSoil        = soilVals.length ? (soilVals.reduce((a, b) => a + b, 0) / soilVals.length).toFixed(1) : 'N/A';
+    const avgDryRate     = dryingRates.length   ? (dryingRates.reduce((a, b) => a + b, 0) / dryingRates.length).toFixed(2)     : null;
+    const avgWaterJump   = wateringJumps.length ? (wateringJumps.reduce((a, b) => a + b, 0) / wateringJumps.length).toFixed(1) : null;
+    const wateringEvents = wateringJumps.length;
 
-    const stats = { readings: rows.length, avg_soil: avgSoil, avg_drying_pct_per_hour: avgDryRate, avg_pump_effect_pct: avgPumpEffect, light_by_hour: avgLightH };
+    const stats = { readings: rows.length, avg_soil: avgSoil, avg_drying_pct_per_hour: avgDryRate, avg_watering_jump_pct: avgWaterJump, watering_events: wateringEvents, light_by_hour: avgLightH };
 
     const prompt = `You are a plant science AI. Build a personalized care model from real greenhouse data.
 
 Data from last 7 days (${rows.length} readings):
 - Average soil moisture: ${avgSoil}%
-- Average drying rate: ${avgDryRate ?? 'N/A'}% per hour (between waterings)
-- Average pump effect: ${avgPumpEffect ?? 'N/A'}% moisture increase per watering cycle
+- Average drying rate: ${avgDryRate ?? 'N/A'}% per hour (gradual drops between waterings)
+- Detected watering events: ${wateringEvents} (soil jumps >3% counted as watering)
+- Average soil moisture jump per watering: ${avgWaterJump ?? 'N/A'}%
 - Light level by hour of day: ${JSON.stringify(avgLightH)}
 
 Use these real numbers to produce a personalized model for THIS specific greenhouse.
