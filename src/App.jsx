@@ -3,6 +3,7 @@ import Header      from './components/Header';
 import DeviceBar   from './components/DeviceBar';
 import StatusView  from './components/StatusView';
 import HistoryView from './components/HistoryView';
+import ReportsView from './components/ReportsView';
 import ChatView    from './components/ChatView';
 import AlertsView  from './components/AlertsView';
 import { fetchLogs, fetchState, fetchNotifications } from './api';
@@ -65,6 +66,9 @@ export default function App() {
         )}
         {tab === 'history' && (
           <HistoryView logs={logs} onLogsCleared={refresh} />
+        )}
+        {tab === 'reports' && (
+          <ReportsView />
         )}
         {tab === 'chat' && (
           <ChatView />

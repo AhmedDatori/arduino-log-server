@@ -99,6 +99,25 @@ async function initDB() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS reports (
+      id           SERIAL      PRIMARY KEY,
+      title        TEXT        NOT NULL,
+      status       TEXT        NOT NULL DEFAULT 'fair',
+      summary      TEXT,
+      soil         TEXT,
+      water        TEXT,
+      light        TEXT,
+      temp         TEXT,
+      hum          TEXT,
+      main_problem TEXT,
+      action       TEXT,
+      period_start TIMESTAMPTZ,
+      period_end   TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS health_scores (
       id         SERIAL      PRIMARY KEY,
       score      INT         NOT NULL,
@@ -194,6 +213,114 @@ app.post('/api/health/refresh', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[POST /api/health/refresh]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Daily Report ─────────────────────────────────────────────────
+async function generateDailyReport() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const now   = new Date();
+  const start = new Date(now - 24 * 60 * 60 * 1000);
+
+  const { rows } = await pool.query(`
+    SELECT
+      COUNT(*)                          AS readings,
+      ROUND(AVG(soil)::numeric,1)       AS avg_soil,
+      MIN(soil)                         AS min_soil,
+      MAX(soil)                         AS max_soil,
+      ROUND(AVG(water)::numeric,0)      AS avg_water,
+      MIN(water)                        AS min_water,
+      MAX(water)                        AS max_water,
+      ROUND(AVG(light)::numeric,1)      AS avg_light,
+      MIN(light)                        AS min_light,
+      MAX(light)                        AS max_light,
+      ROUND(AVG(temp)::numeric,1)       AS avg_temp,
+      MIN(temp)                         AS min_temp,
+      MAX(temp)                         AS max_temp,
+      ROUND(AVG(hum)::numeric,1)        AS avg_hum,
+      MIN(hum)                          AS min_hum,
+      MAX(hum)                          AS max_hum
+    FROM logs WHERE time >= $1
+  `, [start]);
+
+  const d = rows[0];
+  if (!d || Number(d.readings) === 0) return null;
+
+  const dateStr = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  const prompt = `You are writing a daily greenhouse report for a plant owner.
+
+Data from the last 24 hours (${d.readings} readings from ${start.toISOString()} to ${now.toISOString()}):
+- Soil moisture:  avg ${d.avg_soil}%,  min ${d.min_soil}%,  max ${d.max_soil}%
+- Water level:    avg ${d.avg_water} raw (0-1023; <200=empty,<500=low,<800=medium,≥800=full), min ${d.min_water}, max ${d.max_water}
+- Light:          avg ${d.avg_light}%, min ${d.min_light}%, max ${d.max_light}%
+- Temperature:    avg ${d.avg_temp}°C, min ${d.min_temp}°C, max ${d.max_temp}°C
+- Humidity:       avg ${d.avg_hum}%,  min ${d.min_hum}%,  max ${d.max_hum}%
+
+Write in a clear, friendly tone for a non-technical plant owner.
+Respond ONLY with valid JSON, no markdown:
+{
+  "title": "Daily Report — ${dateStr}",
+  "status": "<'good'|'fair'|'poor'>",
+  "summary": "<2-3 sentences overview of today>",
+  "soil":  "<one clear sentence about soil moisture>",
+  "water": "<one clear sentence about water level>",
+  "light": "<one clear sentence about light>",
+  "temp":  "<one clear sentence about temperature>",
+  "hum":   "<one clear sentence about humidity>",
+  "main_problem": "<the biggest issue today, or 'No major issues — plant is in good condition.'>",
+  "action": "<specific, practical recommended action for the owner>"
+}`;
+
+  const geminiRes = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+    {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 700, temperature: 0.4 },
+      }),
+    }
+  );
+
+  const data  = await geminiRes.json();
+  const text  = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON in Gemini response');
+
+  const r = JSON.parse(match[0]);
+  await pool.query(
+    `INSERT INTO reports (title, status, summary, soil, water, light, temp, hum, main_problem, action, period_start, period_end)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [r.title, r.status, r.summary, r.soil, r.water, r.light, r.temp, r.hum, r.main_problem, r.action, start, now]
+  );
+  console.log(`[REPORT] Generated: ${r.title} — ${r.status}`);
+  return r;
+}
+
+app.get('/api/reports', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM reports ORDER BY created_at DESC LIMIT 30'
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[GET /api/reports]', err.message);
+    res.status(500).json([]);
+  }
+});
+
+app.post('/api/reports/generate', async (req, res) => {
+  try {
+    const result = await generateDailyReport();
+    if (!result) return res.status(503).json({ error: 'No data or API key missing' });
+    res.json(result);
+  } catch (err) {
+    console.error('[POST /api/reports/generate]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -478,8 +605,11 @@ initDB()
       // Health score auto-refresh every 1 hour
       const HEALTH_INTERVAL_MS = 60 * 60 * 1000;
       setInterval(() => computeHealthScore().catch(e => console.error('[HEALTH auto]', e.message)), HEALTH_INTERVAL_MS);
-      // Compute one score on startup (after 10s to let DB settle)
       setTimeout(() => computeHealthScore().catch(e => console.error('[HEALTH init]', e.message)), 10_000);
+
+      // Daily report auto-generate every 24 hours
+      const REPORT_INTERVAL_MS = 24 * 60 * 60 * 1000;
+      setInterval(() => generateDailyReport().catch(e => console.error('[REPORT auto]', e.message)), REPORT_INTERVAL_MS);
     });
   })
   .catch(err => {

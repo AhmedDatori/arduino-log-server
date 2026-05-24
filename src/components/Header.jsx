@@ -3,6 +3,7 @@ import React, { useRef, useEffect, useState } from 'react';
 const TABS = [
   { id: 'status',  label: 'Status'   },
   { id: 'history', label: 'History'  },
+  { id: 'reports', label: 'Reports'  },
   { id: 'chat',    label: 'AI Chat'  },
   { id: 'alerts',  label: 'Alerts'   },
 ];

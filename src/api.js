@@ -35,6 +35,10 @@ export async function sendChatMessage(message) {
   return data; // caller reads data.response or data.error
 }
 
+// ─── Reports ───────────────────────────────────────────────────────
+export const fetchReports    = () => request('/api/reports');
+export const generateReport  = () => request('/api/reports/generate', { method: 'POST' });
+
 // ─── Health Score ──────────────────────────────────────────────────
 export const fetchHealth   = () => request('/api/health');
 export const refreshHealth = () => request('/api/health/refresh', { method: 'POST' });
