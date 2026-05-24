@@ -19,7 +19,7 @@ const pool = new Pool({
   idleTimeoutMillis:       30000,
   connectionTimeoutMillis: 5000
 });
- //s
+
 // ── Google Gemini ─────────────────────────────────────────────────
 const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
@@ -28,13 +28,28 @@ app.use(express.urlencoded({ extended: true }));
 
 // ── DB init ───────────────────────────────────────────────────────
 async function initDB() {
+  // Logs table with individual sensor columns
   await pool.query(`CREATE TABLE IF NOT EXISTS logs (
     id      SERIAL      PRIMARY KEY,
-    message TEXT        NOT NULL DEFAULT '',
     device  TEXT        NOT NULL DEFAULT 'ESP-01',
     ip      TEXT        NOT NULL DEFAULT '',
+    water   INT,
+    soil    INT,
+    light   INT,
+    temp    FLOAT,
+    hum     FLOAT,
     time    TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+
+  // Migration: add sensor columns if table was created with old schema (message TEXT)
+  const migrations = [
+    ['water', 'INT'], ['soil', 'INT'], ['light', 'INT'],
+    ['temp', 'FLOAT'], ['hum', 'FLOAT']
+  ];
+  for (const [col, type] of migrations) {
+    await pool.query(`ALTER TABLE logs ADD COLUMN IF NOT EXISTS ${col} ${type}`).catch(() => {});
+  }
+
   await pool.query(`CREATE TABLE IF NOT EXISTS actuator_state (
     id         INT         PRIMARY KEY DEFAULT 1,
     light      BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -53,7 +68,7 @@ async function initDB() {
     id           SERIAL      PRIMARY KEY,
     type         TEXT        NOT NULL,
     message      TEXT        NOT NULL,
-    severity     TEXT        NOT NULL DEFAULT 'warning',
+    severity     TEXT        NOT NULL DEFAULT 'info',
     acknowledged BOOLEAN     NOT NULL DEFAULT FALSE,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
@@ -65,6 +80,8 @@ async function getState() {
   const r = await pool.query('SELECT light,pump,buzzer FROM actuator_state WHERE id=1');
   return r.rows[0] || { light: false, pump: false, buzzer: false };
 }
+
+// Parse Arduino message string → sensor numbers
 function parseSensor(msg) {
   const kv = {};
   (msg || '').split(',').forEach(p => {
@@ -78,15 +95,16 @@ function parseSensor(msg) {
 // ── Arduino POST /log ─────────────────────────────────────────────
 app.post('/log', async (req, res) => {
   try {
-    const msg    = String(req.body.message || '(no message)');
+    const msg    = String(req.body.message || '');
     const device = String(req.body.device  || 'ESP-01');
     const ip     = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '');
+    const s      = parseSensor(msg);
     const r = await pool.query(
-      'INSERT INTO logs(message,device,ip) VALUES($1,$2,$3) RETURNING id',
-      [msg, device, ip]
+      'INSERT INTO logs(device,ip,water,soil,light,temp,hum) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id',
+      [device, ip, s.water, s.soil, s.light, s.temp, s.hum]
     );
     const st = await getState();
-    console.log('[LOG]', device, '->', msg);
+    console.log('[LOG]', device, '-> water:', s.water, 'soil:', s.soil, 'light:', s.light, 'temp:', s.temp, 'hum:', s.hum);
     res.json({ success:true, id:r.rows[0].id,
       light:st.light?1:0, pump:st.pump?1:0, buzzer:st.buzzer?1:0 });
   } catch(e) {
@@ -96,8 +114,10 @@ app.post('/log', async (req, res) => {
 });
 
 app.get('/api/logs', async (req, res) => {
-  try { const r = await pool.query('SELECT * FROM logs ORDER BY time DESC LIMIT 100'); res.json(r.rows); }
-  catch(e) { res.status(500).json([]); }
+  try {
+    const r = await pool.query('SELECT id,device,ip,water,soil,light,temp,hum,time FROM logs ORDER BY time DESC LIMIT 200');
+    res.json(r.rows);
+  } catch(e) { res.status(500).json([]); }
 });
 app.delete('/api/logs', async (req, res) => {
   try { await pool.query('TRUNCATE logs RESTART IDENTITY'); res.json({ success:true }); }
@@ -137,21 +157,17 @@ app.post('/api/chat', async (req, res) => {
     const latest = logsR.rows[0];
     let sys = 'You are a concise AI assistant for an Arduino IoT plant monitoring system.\n';
     if (latest) {
-      const s   = parseSensor(latest.message);
-      const age = Math.round((Date.now() - new Date(latest.time)) / 1000);
-      sys += 'Latest sensor reading (' + age + 's ago):\n';
-      if (s.water  !== null) sys += '  Water: ' + s.water + ' (' + (s.water<200?'EMPTY':s.water<500?'LOW':s.water<800?'MEDIUM':'FULL') + ')\n';
-      if (s.soil   !== null) sys += '  Soil: '  + s.soil  + '% (' + (s.soil<30?'DRY':s.soil<60?'OK':'WET') + ')\n';
-      if (s.light  !== null) sys += '  Light: ' + s.light + '% (' + (s.light<20?'DARK':s.light<60?'DIM':'BRIGHT') + ')\n';
-      if (s.temp   !== null) sys += '  Temp: '  + s.temp  + 'C\n';
-      if (s.hum    !== null) sys += '  Hum: '   + s.hum   + '%\n';
-    } else { sys += 'No sensor data yet.\n'; }
-    sys += 'Actuators: Light=' + (st.light?'ON':'OFF') +
-           ', Pump=' + (st.pump?'ON':'OFF') +
-           ', Buzzer=' + (st.buzzer?'ON':'OFF') + '\n';
-    sys += 'Be brief and actionable. Mention concerns proactively.';
+      sys += 'Latest sensor reading:\n';
+      sys += '  Water level: ' + (latest.water !== null ? latest.water + ' (0=empty,1023=full)' : 'N/A') + '\n';
+      sys += '  Soil moisture: ' + (latest.soil !== null ? latest.soil + '%' : 'N/A') + '\n';
+      sys += '  Light: ' + (latest.light !== null ? latest.light + '%' : 'N/A') + '\n';
+      sys += '  Temperature: ' + (latest.temp !== null ? latest.temp + 'C' : 'N/A') + '\n';
+      sys += '  Humidity: ' + (latest.hum !== null ? latest.hum + '%' : 'N/A') + '\n';
+      sys += 'Actuators: Light=' + (st.light?'ON':'OFF') + ', Pump=' + (st.pump?'ON':'OFF') + ', Buzzer=' + (st.buzzer?'ON':'OFF') + '\n';
+      sys += 'Reading time: ' + latest.time + '\n';
+    }
+    sys += 'Be brief and helpful. Focus on plant health.';
 
-    // Build Google Gemini history (role: 'user' | 'model', parts: [{text}])
     const raw = histR.rows.reverse();
     const history = [];
     let lastRole = null;
@@ -207,11 +223,12 @@ async function checkNotifications() {
   try {
     const logsR = await pool.query('SELECT * FROM logs ORDER BY time DESC LIMIT 1');
     if (!logsR.rows.length) return;
-    const log   = logsR.rows[0];
-    const now   = Date.now();
-    const age   = now - new Date(log.time).getTime();
-    const st    = await getState();
-    const s     = parseSensor(log.message);
+    const log = logsR.rows[0];
+    const now = Date.now();
+    const age = now - new Date(log.time).getTime();
+    const st  = await getState();
+    // Use direct DB columns (new schema)
+    const s = { water: log.water, soil: log.soil, light: log.light, temp: log.temp, hum: log.hum };
 
     const alert = async (type, msg, sev) => {
       if (!lastNotified[type] || (now - lastNotified[type]) >= COOLDOWN) {
@@ -256,7 +273,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
   background:radial-gradient(ellipse 55% 45% at 10% 10%,rgba(61,255,160,.05) 0%,transparent 65%),
              radial-gradient(ellipse 45% 40% at 90% 90%,rgba(56,178,248,.04) 0%,transparent 65%)}
 header{position:sticky;top:0;z-index:100;height:62px;background:rgba(6,11,17,.9);backdrop-filter:blur(14px);border-bottom:1px solid #1a2d42}
-.hinner{max-width:1120px;margin:0 auto;height:100%;padding:0 1.5rem;display:flex;align-items:center;gap:1.25rem}
+.hinner{max-width:1180px;margin:0 auto;height:100%;padding:0 1.5rem;display:flex;align-items:center;gap:1.25rem}
 .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.05rem;color:#cdd9e8;letter-spacing:-.02em;white-space:nowrap;display:flex;align-items:center;gap:9px}
 .logo-icon{width:26px;height:26px;flex-shrink:0}
 .logo em{color:#3dffa0;font-style:normal}
@@ -271,123 +288,114 @@ header{position:sticky;top:0;z-index:100;height:62px;background:rgba(6,11,17,.9)
 .icon-btn{background:none;border:1px solid #1a2d42;border-radius:8px;color:#7a94b0;padding:6px 11px;cursor:pointer;font-size:15px;transition:all .2s}
 .icon-btn:hover{border-color:#3dffa0;color:#3dffa0}
 .bell-btn{position:relative;background:none;border:1px solid #1a2d42;border-radius:8px;color:#7a94b0;padding:6px 11px;cursor:pointer;font-size:15px;transition:all .2s}
-.bell-btn:hover{border-color:#ff4d6d;color:#ff4d6d}
-.notif-badge{position:absolute;top:-7px;right:-7px;background:#ff4d6d;color:#fff;font-size:9px;font-weight:700;border-radius:10px;padding:2px 5px;min-width:16px;text-align:center;display:none;font-family:'JetBrains Mono',monospace}
-.notif-badge.show{display:block}
-.view{display:none}.view.active{display:block;animation:fadeUp .3s ease}
-@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-.wrap{max-width:1120px;margin:0 auto;padding:1.5rem;position:relative;z-index:1}
-.stats-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:1.5rem}
-.stat-chip{background:#0f1a28;border:1px solid #1a2d42;border-radius:14px;padding:16px 20px}
-.stat-chip-label{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#4a6080;margin-bottom:8px}
-.stat-chip-val{font-family:'JetBrains Mono',monospace;font-size:1.65rem;font-weight:700;color:#3dffa0;line-height:1}
-.stat-chip-val.sm{font-size:.95rem;color:#cdd9e8;padding-top:3px}
-.sensor-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:14px}
-.scard{background:#0f1a28;border:1px solid #1a2d42;border-radius:18px;padding:20px 14px 18px;display:flex;flex-direction:column;align-items:center;gap:10px;position:relative;overflow:hidden;transition:transform .22s,box-shadow .22s,border-color .3s;opacity:0;animation:cardIn .4s ease forwards}
-.scard::before{content:'';position:absolute;top:0;left:0;right:0;height:2.5px;background:var(--c,#4a6080);border-radius:18px 18px 0 0;opacity:.75}
-.scard:hover{transform:translateY(-4px);box-shadow:0 14px 40px rgba(0,0,0,.45)}
-.scard:nth-child(1){animation-delay:.05s}.scard:nth-child(2){animation-delay:.10s}.scard:nth-child(3){animation-delay:.15s}.scard:nth-child(4){animation-delay:.20s}.scard:nth-child(5){animation-delay:.25s}
-@keyframes cardIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
-.scard-icon{font-size:1.4rem;line-height:1;margin-bottom:-2px}
-.scard-label{font-size:10px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:#4a6080;text-align:center}
-.gauge-wrap{position:relative;width:112px;height:112px}
-.gauge-wrap svg{width:112px;height:112px;display:block}
-.gauge-arc{transition:stroke-dasharray .85s cubic-bezier(.4,0,.2,1)}
-.gauge-center{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
-.gauge-val{font-family:'JetBrains Mono',monospace;font-size:1.3rem;font-weight:700;color:#cdd9e8;line-height:1}
-.bignum-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:16px 0}
-.num-val{font-family:'JetBrains Mono',monospace;font-size:2.6rem;font-weight:700;color:#cdd9e8;line-height:1}
-.num-unit{font-size:1.1rem;color:#7a94b0;margin-left:3px}
-.num-na{font-family:'JetBrains Mono',monospace;font-size:1.6rem;color:#4a6080}
-.status-badge{font-size:10px;font-weight:700;letter-spacing:.1em;padding:4px 12px;border-radius:20px;border:1px solid;transition:all .4s}
-.no-data{grid-column:1/-1;text-align:center;padding:5rem 0;color:#4a6080}
-.no-data-icon{font-size:3rem;margin-bottom:1rem;opacity:.3}
-.section-hdr{display:flex;align-items:center;gap:12px;font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#4a6080;margin:1.75rem 0 1rem}
-.section-hdr::after{content:'';flex:1;height:1px;background:#1a2d42}
-.ctrl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
-.ctrl-card{background:#0f1a28;border:1px solid #1a2d42;border-radius:18px;padding:22px 18px 20px;display:flex;flex-direction:column;align-items:center;gap:14px;position:relative;overflow:hidden;transition:border-color .3s,box-shadow .3s}
-.ctrl-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2.5px;background:var(--c,#4a6080);border-radius:18px 18px 0 0;transition:background .4s}
-.ctrl-card:hover{box-shadow:0 10px 32px rgba(0,0,0,.4)}
-.ctrl-icon{font-size:2rem;line-height:1}
-.ctrl-name{font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#7a94b0}
-.ctrl-state-val{font-family:'JetBrains Mono',monospace;font-size:1.7rem;font-weight:700;color:var(--c,#4a6080);letter-spacing:.06em;transition:color .4s;line-height:1}
-.ctrl-btns{display:flex;gap:10px;width:100%}
-.cbon,.cboff{flex:1;padding:11px 0;border-radius:11px;border:1px solid;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:.06em;transition:background .2s,color .2s,border-color .2s,transform .1s}
-.cbon:active,.cboff:active{transform:scale(.97)}
-.cbon{color:#3dffa0;border-color:rgba(61,255,160,.3);background:rgba(61,255,160,.07)}
-.cboff{color:#ff4d6d;border-color:rgba(255,77,109,.3);background:rgba(255,77,109,.07)}
-.ctrl-hint{font-size:10px;color:#2a3f58;text-align:center;line-height:1.4}
-.hist-header,.alerts-header,.chat-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem}
-.hist-title{font-family:'Syne',sans-serif;font-size:1.1rem;font-weight:700;color:#cdd9e8}
-.btn-clear{background:none;border:1px solid rgba(255,77,109,.3);color:#ff4d6d;border-radius:8px;padding:6px 16px;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s}
-.btn-clear:hover{background:rgba(255,77,109,.1);border-color:#ff4d6d}
-.table-wrap{overflow-x:auto;border-radius:14px;border:1px solid #1a2d42}
-table{width:100%;border-collapse:collapse;font-size:12px}
-thead{background:#0d1620;border-bottom:1px solid #1a2d42}
-th{padding:11px 14px;text-align:left;font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#4a6080;white-space:nowrap}
-td{padding:10px 14px;border-bottom:1px solid rgba(26,45,66,.5);font-family:'JetBrains Mono',monospace}
-tr:last-child td{border-bottom:none}
+.bell-btn:hover{border-color:#f5a524;color:#f5a524}
+.notif-badge{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;border-radius:8px;background:#ff4d6d;color:#fff;font-size:9px;font-weight:700;display:none;align-items:center;justify-content:center;padding:0 3px}
+.notif-badge.show{display:flex}
+.view{display:none;min-height:calc(100vh - 62px)}
+.view.active{display:block}
+.wrap{max-width:1180px;margin:0 auto;padding:2rem 1.5rem}
+
+/* ── Device status bar ────────────────────────── */
+.device-bar{display:flex;align-items:center;gap:1.5rem;padding:.75rem 1.5rem;background:rgba(255,255,255,.025);border-bottom:1px solid #0f1e2e;font-size:12px;color:#4a6080}
+.device-bar-inner{max-width:1180px;margin:0 auto;width:100%;display:flex;align-items:center;gap:2rem}
+.db-item{display:flex;align-items:center;gap:6px}
+.db-label{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#2a3f58}
+.db-val{color:#7a94b0;font-family:'JetBrains Mono',monospace;font-size:12px}
+.db-val.green{color:#3dffa0}
+.db-dot{width:6px;height:6px;border-radius:50%;background:#3dffa0;animation:blink 1.8s ease-in-out infinite;flex-shrink:0}
+.db-dot.offline{background:#ff4d6d;animation:none}
+
+/* ── Sensor grid ────────────────────────────────── */
+.sensor-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1.25rem;margin-bottom:2rem}
+.scard{background:rgba(10,20,35,.6);border:1px solid #0f1e2e;border-radius:16px;padding:1.5rem 1.25rem 1.25rem;display:flex;flex-direction:column;align-items:center;gap:.6rem;position:relative;overflow:hidden;transition:border-color .3s}
+.scard::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(var(--cr),var(--cg),var(--cb),.07) 0%,transparent 60%);pointer-events:none;border-radius:16px}
+.scard-icon{font-size:1.6rem;line-height:1}
+.scard-label{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#4a6080}
+.gauge-wrap{position:relative;width:100px;height:100px;display:flex;align-items:center;justify-content:center}
+.gauge-center{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column}
+.gauge-val{font-family:'JetBrains Mono',monospace;font-size:1.1rem;font-weight:700;color:#cdd9e8}
+.gauge-arc{transition:stroke-dasharray .6s ease}
+.bignum-wrap{display:flex;align-items:baseline;gap:4px;margin:.25rem 0}
+.num-val{font-family:'JetBrains Mono',monospace;font-size:2rem;font-weight:700;color:#cdd9e8;line-height:1}
+.num-unit{font-size:.85rem;color:#4a6080}
+.num-na{font-family:'JetBrains Mono',monospace;font-size:1.6rem;color:#2a3f58}
+.status-badge{font-size:10px;font-weight:700;letter-spacing:.08em;padding:3px 10px;border-radius:20px;border:1px solid currentColor}
+
+/* ── Section header ─────────────────────────────── */
+.section-hdr{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#2a3f58;padding-bottom:.6rem;border-bottom:1px solid #0f1e2e;margin-bottom:1.25rem}
+
+/* ── Controls ───────────────────────────────────── */
+.ctrl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1.25rem;margin-bottom:2rem}
+.ctrl-card{background:rgba(10,20,35,.6);border:1px solid #0f1e2e;border-radius:16px;padding:1.5rem 1.25rem 1.25rem;display:flex;flex-direction:column;align-items:center;gap:.5rem;transition:border-color .3s;border-color:var(--c)}
+.ctrl-icon{font-size:1.8rem}
+.ctrl-name{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#4a6080}
+.ctrl-state-val{font-family:'JetBrains Mono',monospace;font-size:.8rem;color:var(--c);min-height:1em}
+.ctrl-btns{display:flex;gap:.5rem;margin-top:.25rem}
+.cbon,.cboff{border:1px solid;border-radius:8px;padding:5px 14px;cursor:pointer;font-size:12px;font-weight:600;transition:all .2s;font-family:'DM Sans',sans-serif}
+.cbon{border-color:rgba(61,255,160,.3);color:#3dffa0;background:rgba(61,255,160,.07)}
+.cboff{border-color:rgba(255,77,109,.3);color:#ff4d6d;background:rgba(255,77,109,.07)}
+.ctrl-hint{font-size:10px;color:#2a3f58}
+
+/* ── History ────────────────────────────────────── */
+.hist-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem}
+.hist-title{font-family:'Syne',sans-serif;font-weight:700;font-size:1rem}
+.btn-clear{background:none;border:1px solid #1a2d42;border-radius:8px;color:#4a6080;padding:5px 14px;cursor:pointer;font-size:12px;transition:all .2s}
+.btn-clear:hover{border-color:#ff4d6d;color:#ff4d6d}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#2a3f58;padding:.6rem .8rem;border-bottom:1px solid #0f1e2e;text-align:left}
+td{padding:.55rem .8rem;border-bottom:1px solid rgba(15,30,46,.6);font-size:12px;vertical-align:middle}
 tr:hover td{background:rgba(255,255,255,.02)}
-.td-num{color:#2a3f58;font-size:11px}
-.td-time{color:#7a94b0;font-size:11px;white-space:nowrap}
-.td-ago{color:#4a6080;font-size:10px;display:block}
-.td-dev{color:#38b2f8}
-.cv-g{color:#3dffa0}.cv-a{color:#f5a524}.cv-r{color:#ff4d6d}.cv-b{color:#38b2f8}.cv-m{color:#4a6080}
-.empty-row td{text-align:center;padding:3rem;color:#4a6080}
-/* ── Chat ── */
-.chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 190px);min-height:420px}
-.chat-msgs{flex:1;overflow-y:auto;padding:1rem;background:#0f1a28;border:1px solid #1a2d42;border-radius:14px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
-.msg{display:flex;flex-direction:column;max-width:80%}
+.td-num{color:#2a3f58;font-family:'JetBrains Mono',monospace;font-size:11px}
+.td-time{font-family:'JetBrains Mono',monospace;font-size:11px;white-space:nowrap}
+.td-ago{display:block;font-size:10px;color:#2a3f58}
+.td-dev{color:#7a94b0;font-size:11px}
+.td-na{color:#2a3f58}
+.cv-g{color:#3dffa0} .cv-a{color:#f5a524} .cv-r{color:#ff4d6d} .cv-b{color:#38b2f8} .cv-m{color:#4a6080}
+.empty-row td{text-align:center;color:#2a3f58;padding:2.5rem}
+
+/* ── Chat ───────────────────────────────────────── */
+.chat-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem}
+.chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 220px);min-height:400px}
+.chat-msgs{flex:1;overflow-y:auto;border:1px solid #0f1e2e;border-radius:12px;padding:1rem;display:flex;flex-direction:column;gap:.75rem;background:rgba(6,11,17,.5)}
+.msg{display:flex;flex-direction:column;gap:2px;max-width:80%}
 .msg.user{align-self:flex-end;align-items:flex-end}
-.msg.ai{align-self:flex-start;align-items:flex-start}
-.msg-role{font-size:10px;color:#4a6080;margin-bottom:4px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
-.msg-bubble{padding:12px 16px;border-radius:16px;font-size:13px;line-height:1.6}
-.msg.user .msg-bubble{background:rgba(61,255,160,.12);border:1px solid rgba(61,255,160,.25);color:#cdd9e8;border-bottom-right-radius:4px}
-.msg.ai  .msg-bubble{background:#162234;border:1px solid #1a2d42;color:#cdd9e8;border-bottom-left-radius:4px}
-.msg-time{font-size:9px;color:#2a3f58;margin-top:4px}
-.typing{display:flex;gap:5px;align-items:center;padding:12px 16px;background:#162234;border:1px solid #1a2d42;border-radius:16px;border-bottom-left-radius:4px}
-.typing-dot{width:6px;height:6px;background:#4a6080;border-radius:50%;animation:tdot .8s ease infinite}
-.typing-dot:nth-child(2){animation-delay:.15s}.typing-dot:nth-child(3){animation-delay:.3s}
-@keyframes tdot{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
-.chat-form{display:flex;gap:10px;margin-top:12px}
-.chat-inp{flex:1;background:#0f1a28;border:1px solid #1a2d42;border-radius:12px;padding:12px 16px;color:#cdd9e8;font-family:'DM Sans',sans-serif;font-size:13px;outline:none;transition:border-color .2s}
+.msg.ai{align-self:flex-start}
+.msg-role{font-size:10px;font-weight:600;letter-spacing:.06em;color:#2a3f58;text-transform:uppercase}
+.msg-bubble{background:rgba(255,255,255,.05);border:1px solid #0f1e2e;border-radius:10px;padding:.5rem .75rem;font-size:13px;line-height:1.55}
+.msg.user .msg-bubble{background:rgba(61,255,160,.08);border-color:rgba(61,255,160,.2)}
+.msg-time{font-size:10px;color:#2a3f58;font-family:'JetBrains Mono',monospace}
+.chat-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:1rem;color:#2a3f58}
+.chat-empty-icon{font-size:3rem}
+.chat-hints{display:flex;flex-wrap:wrap;gap:.5rem;justify-content:center;margin-top:.5rem}
+.chat-hint-chip{background:rgba(61,255,160,.06);border:1px solid rgba(61,255,160,.2);border-radius:20px;padding:4px 12px;font-size:12px;color:#3dffa0;cursor:pointer;transition:background .2s}
+.chat-hint-chip:hover{background:rgba(61,255,160,.14)}
+.typing{display:flex;gap:5px;align-items:center;padding:.25rem 0}
+.typing-dot{width:6px;height:6px;border-radius:50%;background:#3dffa0;animation:tdot 1.2s ease-in-out infinite}
+.typing-dot:nth-child(2){animation-delay:.2s}
+.typing-dot:nth-child(3){animation-delay:.4s}
+@keyframes tdot{0%,80%,100%{transform:scale(.6);opacity:.4}40%{transform:scale(1);opacity:1}}
+.chat-form{display:flex;gap:.75rem;margin-top:.75rem}
+.chat-inp{flex:1;background:rgba(10,20,35,.8);border:1px solid #1a2d42;border-radius:10px;padding:.6rem 1rem;color:#cdd9e8;font-family:'DM Sans',sans-serif;font-size:13px;outline:none;transition:border-color .2s}
 .chat-inp:focus{border-color:#3dffa0}
-.chat-inp::placeholder{color:#2a3f58}
-.chat-send{background:rgba(61,255,160,.1);border:1px solid rgba(61,255,160,.3);border-radius:12px;padding:12px 22px;color:#3dffa0;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap}
-.chat-send:hover{background:rgba(61,255,160,.2)}
-.chat-send:disabled{opacity:.4;cursor:not-allowed}
-.chat-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#4a6080;gap:10px;text-align:center}
-.chat-empty-icon{font-size:2.5rem;opacity:.3}
-.chat-hints{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:8px}
-.chat-hint-chip{font-size:11px;color:#4a6080;border:1px solid #1a2d42;border-radius:20px;padding:5px 13px;cursor:pointer;transition:all .2s}
-.chat-hint-chip:hover{border-color:#3dffa0;color:#3dffa0}
-/* ── Alerts ── */
-.alert-item{background:#0f1a28;border:1px solid #1a2d42;border-left:3px solid #1a2d42;border-radius:14px;padding:16px 18px;display:flex;align-items:flex-start;gap:14px;margin-bottom:10px;animation:cardIn .3s ease;transition:opacity .3s}
-.alert-item.danger{border-left-color:#ff4d6d}
-.alert-item.warning{border-left-color:#f5a524}
-.alert-item.info{border-left-color:#38b2f8}
-.alert-item.acked{opacity:.35}
-.alert-icon{font-size:1.3rem;line-height:1;flex-shrink:0;margin-top:2px}
+.chat-send{background:#3dffa0;border:none;border-radius:10px;padding:.6rem 1.25rem;color:#060b11;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:opacity .2s}
+.chat-send:hover{opacity:.85}
+.chat-send:disabled{opacity:.4;cursor:default}
+
+/* ── Alerts ─────────────────────────────────────── */
+.alerts-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem}
+.alerts-empty{display:flex;flex-direction:column;align-items:center;gap:.75rem;padding:3rem;color:#2a3f58}
+.alerts-empty-icon{font-size:2.5rem}
+.alert-item{display:flex;align-items:flex-start;gap:1rem;padding:1rem;border:1px solid #0f1e2e;border-radius:12px;margin-bottom:.75rem;background:rgba(10,20,35,.5)}
+.alert-item.danger{border-color:rgba(255,77,109,.25);background:rgba(255,77,109,.05)}
+.alert-item.warning{border-color:rgba(245,165,36,.25);background:rgba(245,165,36,.05)}
+.alert-item.acked{opacity:.45}
+.alert-icon{font-size:1.2rem;flex-shrink:0;margin-top:2px}
 .alert-body{flex:1}
-.alert-msg{color:#cdd9e8;font-size:13px;margin-bottom:4px;line-height:1.4}
-.alert-meta{font-size:10px;color:#4a6080}
-.btn-ack{background:none;border:1px solid #1a2d42;border-radius:8px;color:#4a6080;padding:4px 12px;font-size:11px;cursor:pointer;white-space:nowrap;flex-shrink:0;transition:all .2s;font-family:'DM Sans',sans-serif}
+.alert-msg{font-size:13px;color:#cdd9e8;margin-bottom:3px}
+.alert-meta{font-size:11px;color:#2a3f58}
+.btn-ack{background:none;border:1px solid #1a2d42;border-radius:6px;color:#4a6080;padding:3px 10px;cursor:pointer;font-size:11px;flex-shrink:0;align-self:center;transition:all .2s;white-space:nowrap}
 .btn-ack:hover{border-color:#3dffa0;color:#3dffa0}
-.alerts-empty{text-align:center;padding:5rem 0;color:#4a6080}
-.alerts-empty-icon{font-size:3rem;opacity:.3;margin-bottom:1rem}
-@media(max-width:640px){
-  .hinner{padding:0 1rem;gap:.5rem}
-  .logo span:last-child{display:none}
-  .stats-strip{grid-template-columns:1fr 1fr}
-  .stats-strip .stat-chip:last-child{grid-column:span 2}
-  .sensor-grid,.ctrl-grid{grid-template-columns:1fr 1fr}
-  .wrap{padding:1rem}
-  .tab{padding:8px 11px;font-size:10px}
-}
-@media(max-width:400px){
-  .sensor-grid,.ctrl-grid{grid-template-columns:1fr}
-  .tab{padding:6px 8px;font-size:9px;letter-spacing:.04em}
-}
 </style>
 </head>
 <body>
@@ -419,16 +427,22 @@ tr:hover td{background:rgba(255,255,255,.02)}
   </div>
 </header>
 
+<!-- thin device status bar -->
+<div class="device-bar">
+  <div class="device-bar-inner">
+    <div class="db-item"><span class="db-dot" id="db-dot"></span><span class="db-label">Status</span><span class="db-val green" id="db-status">Waiting...</span></div>
+    <div class="db-item"><span class="db-label">Device</span><span class="db-val" id="s-device">&#8212;</span></div>
+    <div class="db-item"><span class="db-label">Last&nbsp;Seen</span><span class="db-val" id="s-last">&#8212;</span></div>
+    <div class="db-item"><span class="db-label">Logs</span><span class="db-val" id="s-total">0</span></div>
+  </div>
+</div>
+
 <!-- STATUS VIEW -->
 <div class="view active" id="view-status">
   <div class="wrap">
-    <div class="stats-strip">
-      <div class="stat-chip"><div class="stat-chip-label">Total Logs</div><div class="stat-chip-val" id="s-total">&#8212;</div></div>
-      <div class="stat-chip"><div class="stat-chip-label">Last Seen</div><div class="stat-chip-val sm" id="s-last">&#8212;</div></div>
-      <div class="stat-chip"><div class="stat-chip-label">Device</div><div class="stat-chip-val sm" id="s-device">&#8212;</div></div>
-    </div>
+    <div class="section-hdr">Sensors</div>
     <div class="sensor-grid" id="sensor-grid">
-      <div class="no-data"><div class="no-data-icon">&#127807;</div><div>Waiting for Arduino&#8230;</div></div>
+      <!-- always rendered by JS, shows N/A until data arrives -->
     </div>
     <div class="section-hdr">Controls</div>
     <div class="ctrl-grid">
@@ -470,13 +484,17 @@ tr:hover td{background:rgba(255,255,255,.02)}
 <div class="view" id="view-history">
   <div class="wrap">
     <div class="hist-header">
-      <div class="hist-title">Log History</div>
+      <div class="hist-title">&#128200; Log History</div>
       <button class="btn-clear" onclick="clearLogs()">&#128465; Clear All</button>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>#</th><th>Time</th><th>Device</th><th>Water</th><th>Soil</th><th>Light</th><th>Temp</th><th>Hum</th></tr></thead>
-        <tbody id="hist-body"></tbody>
+        <thead><tr>
+          <th>#</th><th>Time</th><th>Device</th>
+          <th>Water</th><th>Soil %</th><th>Light %</th>
+          <th>Temp &#176;C</th><th>Hum %</th>
+        </tr></thead>
+        <tbody id="hist-body"><tr class="empty-row"><td colspan="8">Loading...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -514,7 +532,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 <div class="view" id="view-alerts">
   <div class="wrap">
     <div class="alerts-header">
-      <div class="hist-title">Alerts</div>
+      <div class="hist-title">&#128276; Alerts</div>
       <button class="btn-clear" onclick="clearAlerts()">&#128465; Clear All</button>
     </div>
     <div id="alerts-list"></div>
@@ -531,7 +549,7 @@ function switchTab(tab) {
   document.querySelectorAll('.view').forEach(function(v){ v.classList.remove('active'); });
   document.getElementById('view-' + tab).classList.add('active');
   positionBar();
-  if (tab === 'chat') { loadConversations(); }
+  if (tab === 'chat')   { loadConversations(); }
   if (tab === 'alerts') { loadAlerts(); }
 }
 function positionBar() {
@@ -544,274 +562,345 @@ function positionBar() {
   bar.style.transform = 'translateX(' + (ar.left - nr.left) + 'px)';
 }
 
-// ── Sensor parsing ────────────────────────────────────────────────
-function parseSensorMsg(msg) {
-  var kv = {};
-  (msg || '').split(',').forEach(function(p) {
-    var i = p.indexOf(':');
-    if (i > 0) kv[p.slice(0,i).trim()] = p.slice(i+1).trim();
-  });
-  function num(k) { return (kv[k] !== undefined && kv[k] !== 'N/A') ? parseFloat(kv[k]) : null; }
-  return { water:num('water'), soil:num('soil'), light:num('light'), temp:num('temp'), hum:num('hum') };
-}
+// ── Helpers ───────────────────────────────────────────────────────
 function ago(iso) {
   var s = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (s < 5)    return 'just now';
   if (s < 60)   return s + 's ago';
   if (s < 3600) return Math.floor(s/60) + 'm ago';
   return Math.floor(s/3600) + 'h ago';
 }
+function escHtml(str) {
+  return String(str).split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;').split('\n').join('<br>');
+}
+// Extract sensor numbers from a log row (new schema: direct columns)
+function rowToSensor(l) {
+  if (!l) return { water:null, soil:null, light:null, temp:null, hum:null };
+  return {
+    water: l.water  !== null && l.water  !== undefined ? Number(l.water)  : null,
+    soil:  l.soil   !== null && l.soil   !== undefined ? Number(l.soil)   : null,
+    light: l.light  !== null && l.light  !== undefined ? Number(l.light)  : null,
+    temp:  l.temp   !== null && l.temp   !== undefined ? Number(l.temp)   : null,
+    hum:   l.hum    !== null && l.hum    !== undefined ? Number(l.hum)    : null
+  };
+}
 
-// ── Colors ────────────────────────────────────────────────────────
-var G='#3dffa0',A='#f5a524',R='#ff4d6d',B='#38b2f8',M='#4a6080';
+// ── Colors & info ─────────────────────────────────────────────────
+var G='#3dffa0', A='#f5a524', R='#ff4d6d', B='#38b2f8', M='#4a6080';
 var GB='rgba(61,255,160,.12)',AB='rgba(245,165,36,.12)',RB='rgba(255,77,109,.12)',BB='rgba(56,178,248,.12)',MB='rgba(74,96,128,.12)';
+
 function waterInfo(v) {
   if (v===null) return {label:'N/A',color:M,bg:MB,pct:0};
   var p=Math.round(v/1023*100);
   if (v<200)  return {label:'EMPTY', color:R,bg:RB,pct:p};
   if (v<500)  return {label:'LOW',   color:A,bg:AB,pct:p};
-  if (v<800)  return {label:'MEDIUM',color:A,bg:AB,pct:p};
+  if (v<800)  return {label:'MED',   color:A,bg:AB,pct:p};
   return             {label:'FULL',  color:G,bg:GB,pct:p};
 }
-function soilInfo(v)  { if (v===null) return {label:'N/A',color:M,bg:MB}; if (v<30) return {label:'DRY',color:R,bg:RB}; if (v<60) return {label:'OK',color:A,bg:AB}; return {label:'WET',color:G,bg:GB}; }
-function lightInfo(v) { if (v===null) return {label:'N/A',color:M,bg:MB}; if (v<20) return {label:'DARK',color:M,bg:MB}; if (v<60) return {label:'DIM',color:A,bg:AB}; return {label:'BRIGHT',color:G,bg:GB}; }
-function tempInfo(v)  { if (v===null) return {label:'N/A',color:M,bg:MB}; if (v<10) return {label:'COLD',color:B,bg:BB}; if (v>35) return {label:'HOT',color:R,bg:RB}; return {label:'NORMAL',color:G,bg:GB}; }
-function humInfo(v)   { if (v===null) return {label:'N/A',color:M,bg:MB}; if (v<30) return {label:'DRY',color:R,bg:RB}; if (v>70) return {label:'HUMID',color:B,bg:BB}; return {label:'GOOD',color:G,bg:GB}; }
-function colorCls(c)  { return c===G?'cv-g':c===A?'cv-a':c===R?'cv-r':c===B?'cv-b':'cv-m'; }
+function soilInfo(v)  {
+  if (v===null) return {label:'N/A',color:M,bg:MB};
+  if (v<30) return {label:'DRY',color:R,bg:RB};
+  if (v<60) return {label:'OK', color:A,bg:AB};
+  return           {label:'WET',color:G,bg:GB};
+}
+function lightInfo(v) {
+  if (v===null) return {label:'N/A',color:M,bg:MB};
+  if (v<20) return {label:'DARK',  color:M,bg:MB};
+  if (v<60) return {label:'DIM',   color:A,bg:AB};
+  return           {label:'BRIGHT',color:G,bg:GB};
+}
+function tempInfo(v)  {
+  if (v===null) return {label:'N/A',color:M,bg:MB};
+  if (v<10) return {label:'COLD',  color:B,bg:BB};
+  if (v>35) return {label:'HOT',   color:R,bg:RB};
+  return           {label:'NORMAL',color:G,bg:GB};
+}
+function humInfo(v) {
+  if (v===null) return {label:'N/A',color:M,bg:MB};
+  if (v<30) return {label:'DRY',  color:R,bg:RB};
+  if (v>70) return {label:'HUMID',color:B,bg:BB};
+  return           {label:'GOOD', color:G,bg:GB};
+}
+function colorCls(c) { return c===G?'cv-g':c===A?'cv-a':c===R?'cv-r':c===B?'cv-b':'cv-m'; }
+function hexToRgb(h) {
+  var r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),b=parseInt(h.slice(5,7),16);
+  return r+','+g+','+b;
+}
 
-// ── Gauge ─────────────────────────────────────────────────────────
-var CIRC=263.9,MAXARC=197.9;
-function gauge(pct,color) {
-  var p=Math.min(100,Math.max(0,isNaN(pct)?0:pct));
-  var arc=(MAXARC*p/100).toFixed(1), gap=(CIRC-parseFloat(arc)).toFixed(1);
-  return '<svg viewBox="0 0 120 120">'
-    +'<circle r="42" cx="60" cy="60" fill="none" stroke="#162234" stroke-width="9" stroke-dasharray="197.9 66.0" transform="rotate(135 60 60)" stroke-linecap="round"/>'
-    +'<circle r="42" cx="60" cy="60" fill="none" stroke="'+color+'" stroke-width="9" stroke-dasharray="'+arc+' '+gap+'" transform="rotate(135 60 60)" stroke-linecap="round" class="gauge-arc"/>'
-    +'</svg>';
+// ── Gauge SVG ─────────────────────────────────────────────────────
+var CIRC=263.9, MAXARC=197.9;
+function gauge(pct, color) {
+  var p = Math.min(100, Math.max(0, isNaN(pct) ? 0 : pct));
+  var arc = (MAXARC*p/100).toFixed(1);
+  var gap = (CIRC - parseFloat(arc)).toFixed(1);
+  return '<svg viewBox="0 0 120 120" width="100" height="100">'
+    + '<circle r="42" cx="60" cy="60" fill="none" stroke="#0f1e2e" stroke-width="9"'
+    + ' stroke-dasharray="197.9 66.0" transform="rotate(135 60 60)" stroke-linecap="round"/>'
+    + '<circle r="42" cx="60" cy="60" fill="none" stroke="' + color + '" stroke-width="9"'
+    + ' stroke-dasharray="' + arc + ' ' + gap + '" transform="rotate(135 60 60)"'
+    + ' stroke-linecap="round" class="gauge-arc"/>'
+    + '</svg>';
 }
 function badge(info) {
-  return '<div class="status-badge" style="color:'+info.color+';background:'+info.bg+';border-color:'+info.color+'">'+info.label+'</div>';
+  return '<div class="status-badge" style="color:' + info.color + ';background:' + info.bg + ';border-color:' + info.color + '">' + info.label + '</div>';
 }
-function gaugeCard(icon,label,valStr,pct,info) {
-  return '<div class="scard" style="--c:'+info.color+'">'
-    +'<div class="scard-icon">'+icon+'</div>'
-    +'<div class="scard-label">'+label+'</div>'
-    +'<div class="gauge-wrap">'+gauge(pct,info.color)+'<div class="gauge-center"><div class="gauge-val">'+valStr+'</div></div></div>'
-    +badge(info)+'</div>';
+function gaugeCard(icon, label, valStr, pct, info) {
+  var rgb = hexToRgb(info.color);
+  return '<div class="scard" style="--cr:' + rgb.split(',')[0] + ';--cg:' + rgb.split(',')[1] + ';--cb:' + rgb.split(',')[2] + '">'
+    + '<div class="scard-icon">' + icon + '</div>'
+    + '<div class="scard-label">' + label + '</div>'
+    + '<div class="gauge-wrap">' + gauge(pct, info.color)
+    + '<div class="gauge-center"><div class="gauge-val">' + valStr + '</div></div></div>'
+    + badge(info) + '</div>';
 }
-function bigCard(icon,label,val,unit,info) {
-  var inner=val===null?'<span class="num-na">N/A</span>':'<span class="num-val">'+val.toFixed(1)+'</span><span class="num-unit">'+unit+'</span>';
-  return '<div class="scard" style="--c:'+info.color+'">'
-    +'<div class="scard-icon">'+icon+'</div>'
-    +'<div class="scard-label">'+label+'</div>'
-    +'<div class="bignum-wrap">'+inner+'</div>'
-    +badge(info)+'</div>';
-}
-function renderCards(s) {
-  var wi=waterInfo(s.water),si=soilInfo(s.soil),li=lightInfo(s.light),ti=tempInfo(s.temp),hi=humInfo(s.hum);
-  return gaugeCard('&#128167;','Water Level', s.water!==null?String(s.water):'&#8212;',wi.pct,wi)
-        +gaugeCard('&#127807;','Soil Moisture',s.soil!==null?s.soil+'%':'&#8212;',s.soil,si)
-        +gaugeCard('&#9728;',  'Light',        s.light!==null?s.light+'%':'&#8212;',s.light,li)
-        +bigCard('&#127777;',  'Temperature',s.temp,'&#176;C',ti)
-        +bigCard('&#128166;',  'Humidity',   s.hum,'%',hi);
+function bigCard(icon, label, val, unit, info) {
+  var rgb = hexToRgb(info.color);
+  var inner = val === null
+    ? '<span class="num-na">N/A</span>'
+    : '<span class="num-val">' + val.toFixed(1) + '</span><span class="num-unit">' + unit + '</span>';
+  return '<div class="scard" style="--cr:' + rgb.split(',')[0] + ';--cg:' + rgb.split(',')[1] + ';--cb:' + rgb.split(',')[2] + '">'
+    + '<div class="scard-icon">' + icon + '</div>'
+    + '<div class="scard-label">' + label + '</div>'
+    + '<div class="bignum-wrap">' + inner + '</div>'
+    + badge(info) + '</div>';
 }
 
-// ── History ───────────────────────────────────────────────────────
-function cvCell(val,infoFn,display) {
-  if (val===null) return '<span class="cv-m">&#8212;</span>';
-  var i=infoFn(val);
-  return '<span class="'+colorCls(i.color)+'">'+display+'</span>';
+function renderCards(s) {
+  var wi = waterInfo(s.water), si = soilInfo(s.soil), li = lightInfo(s.light);
+  var ti = tempInfo(s.temp),   hi = humInfo(s.hum);
+  var waterVal = s.water !== null ? String(s.water) : '&#8212;';
+  var soilVal  = s.soil  !== null ? s.soil + '%'    : '&#8212;';
+  var lightVal = s.light !== null ? s.light + '%'   : '&#8212;';
+  return gaugeCard('&#128167;', 'Water Level',   waterVal, wi.pct, wi)
+       + gaugeCard('&#127807;', 'Soil Moisture', soilVal,  s.soil, si)
+       + gaugeCard('&#9728;',   'Light',         lightVal, s.light, li)
+       + bigCard('&#127777;',   'Temperature', s.temp, '&#176;C', ti)
+       + bigCard('&#128166;',   'Humidity',    s.hum,  '%',       hi);
 }
-function wLabel(v) { if (v===null) return '&#8212;'; if (v<200) return 'EMPTY'; if (v<500) return 'LOW'; if (v<800) return 'MEDIUM'; return 'FULL'; }
+
+// ── History table ─────────────────────────────────────────────────
+function wLabel(v) {
+  if (v===null) return '<span class="td-na">&#8212;</span>';
+  if (v<200) return '<span class="cv-r">EMPTY</span>';
+  if (v<500) return '<span class="cv-a">LOW</span>';
+  if (v<800) return '<span class="cv-a">MED</span>';
+  return '<span class="cv-g">FULL</span>';
+}
+function numCell(v, infoFn, suffix) {
+  if (v===null) return '<span class="td-na">&#8212;</span>';
+  var i = infoFn(v);
+  return '<span class="' + colorCls(i.color) + '">' + (typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(1) : v) + (suffix||'') + '</span>';
+}
 function renderHistory(data) {
   if (!data.length) return '<tr class="empty-row"><td colspan="8">No logs yet</td></tr>';
-  return data.map(function(l,i) {
-    var s=parseSensorMsg(l.message), wi=waterInfo(s.water);
-    var t=new Date(l.time), ts=t.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  return data.map(function(l, i) {
+    var s = rowToSensor(l);
+    var t = new Date(l.time);
+    var ts = t.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    var ds = t.toLocaleDateString([], {month:'short',day:'numeric'});
     return '<tr>'
-      +'<td class="td-num">'+(i+1)+'</td>'
-      +'<td class="td-time">'+ts+'<span class="td-ago">'+ago(l.time)+'</span></td>'
-      +'<td class="td-dev">'+l.device+'</td>'
-      +'<td><span class="'+colorCls(wi.color)+'">'+wLabel(s.water)+'</span></td>'
-      +'<td>'+cvCell(s.soil, soilInfo, s.soil!==null?s.soil+'%':'')+'</td>'
-      +'<td>'+cvCell(s.light,lightInfo,s.light!==null?s.light+'%':'')+'</td>'
-      +'<td>'+cvCell(s.temp, tempInfo, s.temp!==null?s.temp.toFixed(1)+'\xb0':'')+'</td>'
-      +'<td>'+cvCell(s.hum,  humInfo,  s.hum!==null?s.hum.toFixed(1)+'%':'')+'</td>'
-      +'</tr>';
+      + '<td class="td-num">' + (i+1) + '</td>'
+      + '<td class="td-time">' + ts + '<span class="td-ago">' + ds + ' &middot; ' + ago(l.time) + '</span></td>'
+      + '<td class="td-dev">' + (l.device||'?') + '</td>'
+      + '<td>' + wLabel(s.water) + '</td>'
+      + '<td>' + numCell(s.soil,  soilInfo,  '%') + '</td>'
+      + '<td>' + numCell(s.light, lightInfo, '%') + '</td>'
+      + '<td>' + numCell(s.temp,  tempInfo,  '') + '</td>'
+      + '<td>' + numCell(s.hum,   humInfo,   '%') + '</td>'
+      + '</tr>';
   }).join('');
 }
 
 // ── Controls ──────────────────────────────────────────────────────
 function setCtrlState(device, on) {
-  var card=document.getElementById('ctrl-'+device), stEl=document.getElementById('cst-'+device);
-  if (!card||!stEl) return;
-  card.style.setProperty('--c', on?G:M);
-  stEl.textContent = on?'ON':'OFF';
-  var onBtn=card.querySelector('.cbon'), offBtn=card.querySelector('.cboff');
-  if (onBtn) { onBtn.style.background=on?G:'rgba(61,255,160,.07)'; onBtn.style.color=on?'#060b11':G; onBtn.style.borderColor=on?G:'rgba(61,255,160,.3)'; }
-  if (offBtn){ offBtn.style.background=!on?R:'rgba(255,77,109,.07)'; offBtn.style.color=!on?'#fff':R; offBtn.style.borderColor=!on?R:'rgba(255,77,109,.3)'; }
+  var card  = document.getElementById('ctrl-' + device);
+  var stEl  = document.getElementById('cst-' + device);
+  if (!card || !stEl) return;
+  card.style.setProperty('--c', on ? G : M);
+  stEl.textContent = on ? 'ON' : 'OFF';
+  var onBtn  = card.querySelector('.cbon');
+  var offBtn = card.querySelector('.cboff');
+  if (onBtn)  { onBtn.style.background  = on  ? G : 'rgba(61,255,160,.07)';  onBtn.style.color  = on  ? '#060b11' : G; onBtn.style.borderColor  = on  ? G : 'rgba(61,255,160,.3)'; }
+  if (offBtn) { offBtn.style.background = !on ? R : 'rgba(255,77,109,.07)'; offBtn.style.color = !on ? '#fff'    : R; offBtn.style.borderColor = !on ? R : 'rgba(255,77,109,.3)'; }
 }
 async function control(device, val) {
-  var on=val===1; setCtrlState(device,on);
+  var on = val === 1; setCtrlState(device, on);
   try {
-    var f=new URLSearchParams(); f.append('device',device); f.append('value',String(val));
-    var resp=await fetch('/api/control',{method:'POST',body:f}).then(function(r){return r.json();});
-    if (resp&&resp.state) { setCtrlState('light',resp.state.light); setCtrlState('pump',resp.state.pump); setCtrlState('buzzer',resp.state.buzzer); }
-  } catch(e){}
+    var f = new URLSearchParams(); f.append('device', device); f.append('value', String(val));
+    var resp = await fetch('/api/control', {method:'POST', body:f}).then(function(r){ return r.json(); });
+    if (resp && resp.state) {
+      setCtrlState('light',  resp.state.light);
+      setCtrlState('pump',   resp.state.pump);
+      setCtrlState('buzzer', resp.state.buzzer);
+    }
+  } catch(e) {}
 }
 
 // ── Chat ──────────────────────────────────────────────────────────
 var chatBusy = false;
-function escHtml(str) {
-  return String(str).split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;').split('\n').join('<br>');
-}
-function scrollChat() { var c=document.getElementById('chat-msgs'); if(c) c.scrollTop=c.scrollHeight; }
-function fillHint(text) { var inp=document.getElementById('chat-input'); if(inp){inp.value=text;inp.focus();} }
+function scrollChat() { var c = document.getElementById('chat-msgs'); if(c) c.scrollTop = c.scrollHeight; }
+function fillHint(text) { var inp = document.getElementById('chat-input'); if(inp){ inp.value = text; inp.focus(); } }
 
 async function loadConversations() {
   try {
-    var msgs=await fetch('/api/conversations').then(function(r){return r.json();});
-    var c=document.getElementById('chat-msgs');
+    var msgs = await fetch('/api/conversations').then(function(r){ return r.json(); });
+    var c = document.getElementById('chat-msgs');
     if (!msgs.length) {
-      c.innerHTML='<div class="chat-empty" id="chat-empty"><div class="chat-empty-icon">&#129302;</div><div>Ask me anything about your plant</div>'
-        +'<div class="chat-hints">'
-        +'<span class="chat-hint-chip" onclick="fillHint(\'How is my plant doing?\')">How is my plant?</span>'
-        +'<span class="chat-hint-chip" onclick="fillHint(\'Is the soil too dry?\')">Soil status?</span>'
-        +'<span class="chat-hint-chip" onclick="fillHint(\'Should I turn on the pump?\')">Turn on pump?</span>'
-        +'</div></div>';
+      c.innerHTML = '<div class="chat-empty" id="chat-empty"><div class="chat-empty-icon">&#129302;</div><div>Ask me anything about your plant</div>'
+        + '<div class="chat-hints">'
+        + '<span class="chat-hint-chip" onclick="fillHint(\'How is my plant doing?\')">How is my plant?</span>'
+        + '<span class="chat-hint-chip" onclick="fillHint(\'Is the soil too dry?\')">Soil status?</span>'
+        + '<span class="chat-hint-chip" onclick="fillHint(\'Should I turn on the pump?\')">Turn on pump?</span>'
+        + '</div></div>';
       return;
     }
     c.innerHTML = msgs.map(function(m) {
-      var cls=m.role==='user'?'user':'ai';
-      var roleLbl=m.role==='user'?'You':'&#127807; AI';
-      var t=new Date(m.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-      return '<div class="msg '+cls+'">'
-        +'<div class="msg-role">'+roleLbl+'</div>'
-        +'<div class="msg-bubble">'+escHtml(m.content)+'</div>'
-        +'<div class="msg-time">'+t+'</div>'
-        +'</div>';
+      var cls    = m.role === 'user' ? 'user' : 'ai';
+      var roleLbl = m.role === 'user' ? 'You' : '&#127807; AI';
+      var t = new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      return '<div class="msg ' + cls + '">'
+        + '<div class="msg-role">' + roleLbl + '</div>'
+        + '<div class="msg-bubble">' + escHtml(m.content) + '</div>'
+        + '<div class="msg-time">' + t + '</div>'
+        + '</div>';
     }).join('');
     scrollChat();
-  } catch(e){}
+  } catch(e) {}
 }
 
 function showTyping() {
-  var c=document.getElementById('chat-msgs');
-  if (!document.getElementById('typing-wrap')&&c) {
-    var d=document.createElement('div'); d.id='typing-wrap'; d.className='msg ai';
-    d.innerHTML='<div class="msg-role">&#127807; AI</div><div class="typing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>';
+  var c = document.getElementById('chat-msgs');
+  if (!document.getElementById('typing-wrap') && c) {
+    var d = document.createElement('div'); d.id = 'typing-wrap'; d.className = 'msg ai';
+    d.innerHTML = '<div class="msg-role">&#127807; AI</div><div class="typing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>';
     c.appendChild(d); scrollChat();
   }
 }
-function hideTyping() { var t=document.getElementById('typing-wrap'); if(t) t.remove(); }
+function hideTyping() { var t = document.getElementById('typing-wrap'); if(t) t.remove(); }
 
 async function sendChatForm(e) { e.preventDefault(); await doSendChat(); }
 async function doSendChat() {
-  var inp=document.getElementById('chat-input');
-  var btn=document.getElementById('chat-send-btn');
-  var msg=(inp.value||'').trim();
-  if (!msg||chatBusy) return;
-  inp.value=''; chatBusy=true; btn.disabled=true;
+  var inp = document.getElementById('chat-input');
+  var btn = document.getElementById('chat-send-btn');
+  var msg = (inp.value || '').trim();
+  if (!msg || chatBusy) return;
+  inp.value = ''; chatBusy = true; btn.disabled = true;
 
-  var c=document.getElementById('chat-msgs');
-  var empty=document.getElementById('chat-empty');
+  var c = document.getElementById('chat-msgs');
+  var empty = document.getElementById('chat-empty');
   if (empty) empty.remove();
 
-  var ud=document.createElement('div'); ud.className='msg user';
-  ud.innerHTML='<div class="msg-role">You</div><div class="msg-bubble">'+escHtml(msg)+'</div>';
+  var ud = document.createElement('div'); ud.className = 'msg user';
+  ud.innerHTML = '<div class="msg-role">You</div><div class="msg-bubble">' + escHtml(msg) + '</div>';
   c.appendChild(ud); scrollChat(); showTyping();
 
   try {
-    var f=new URLSearchParams(); f.append('message',msg);
-    var r=await fetch('/api/chat',{method:'POST',body:f}).then(function(x){return x.json();});
+    var f = new URLSearchParams(); f.append('message', msg);
+    var r = await fetch('/api/chat', {method:'POST', body:f}).then(function(x){ return x.json(); });
     hideTyping();
-    var ad=document.createElement('div'); ad.className='msg ai';
+    var ad = document.createElement('div'); ad.className = 'msg ai';
     if (r.error) {
-      ad.innerHTML='<div class="msg-role">&#127807; AI</div><div class="msg-bubble" style="color:#ff4d6d">'+escHtml(r.error)+'</div>';
+      ad.innerHTML = '<div class="msg-role">&#127807; AI</div><div class="msg-bubble" style="color:#ff4d6d">' + escHtml(r.error) + '</div>';
     } else {
-      ad.innerHTML='<div class="msg-role">&#127807; AI</div><div class="msg-bubble">'+escHtml(r.response)+'</div>';
+      ad.innerHTML = '<div class="msg-role">&#127807; AI</div><div class="msg-bubble">' + escHtml(r.response) + '</div>';
     }
     c.appendChild(ad); scrollChat();
   } catch(err) { hideTyping(); }
-  chatBusy=false; btn.disabled=false; inp.focus();
+  chatBusy = false; btn.disabled = false; inp.focus();
 }
 async function clearChat() {
   if (!confirm('Clear all conversations?')) return;
-  await fetch('/api/conversations',{method:'DELETE'});
+  await fetch('/api/conversations', {method:'DELETE'});
   loadConversations();
 }
 
 // ── Alerts ────────────────────────────────────────────────────────
 async function loadAlerts() {
   try {
-    var alerts=await fetch('/api/notifications').then(function(r){return r.json();});
+    var alerts = await fetch('/api/notifications').then(function(r){ return r.json(); });
     renderAlerts(alerts);
-    var unread=alerts.filter(function(a){return !a.acknowledged;}).length;
-    var badge=document.getElementById('notif-badge');
-    if (badge) { badge.textContent=unread>9?'9+':String(unread); badge.className=unread>0?'notif-badge show':'notif-badge'; }
-  } catch(e){}
+    var unread = alerts.filter(function(a){ return !a.acknowledged; }).length;
+    var badge  = document.getElementById('notif-badge');
+    if (badge) { badge.textContent = unread > 9 ? '9+' : String(unread); badge.className = unread > 0 ? 'notif-badge show' : 'notif-badge'; }
+  } catch(e) {}
 }
 function renderAlerts(alerts) {
-  var c=document.getElementById('alerts-list'); if (!c) return;
-  if (!alerts.length) { c.innerHTML='<div class="alerts-empty"><div class="alerts-empty-icon">&#9989;</div><div>All clear! No alerts.</div></div>'; return; }
-  var icons={danger:'&#128308;',warning:'&#128993;',info:'&#128309;'};
-  c.innerHTML=alerts.map(function(a) {
-    var icon=icons[a.severity]||icons.warning;
-    var t=new Date(a.created_at).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-    var acked=a.acknowledged?' acked':'';
-    return '<div class="alert-item '+a.severity+acked+'">'
-      +'<div class="alert-icon">'+icon+'</div>'
-      +'<div class="alert-body"><div class="alert-msg">'+escHtml(a.message)+'</div>'
-      +'<div class="alert-meta">'+t+(a.acknowledged?' &middot; Dismissed':'')+'</div></div>'
-      +(a.acknowledged?'':'<button class="btn-ack" onclick="ackAlert('+a.id+')">Dismiss</button>')
-      +'</div>';
+  var c = document.getElementById('alerts-list'); if (!c) return;
+  if (!alerts.length) { c.innerHTML = '<div class="alerts-empty"><div class="alerts-empty-icon">&#9989;</div><div>All clear! No alerts.</div></div>'; return; }
+  var icons = {danger:'&#128308;', warning:'&#128993;', info:'&#128309;'};
+  c.innerHTML = alerts.map(function(a) {
+    var icon  = icons[a.severity] || icons.warning;
+    var t     = new Date(a.created_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    var acked = a.acknowledged ? ' acked' : '';
+    return '<div class="alert-item ' + a.severity + acked + '">'
+      + '<div class="alert-icon">' + icon + '</div>'
+      + '<div class="alert-body"><div class="alert-msg">' + escHtml(a.message) + '</div>'
+      + '<div class="alert-meta">' + t + (a.acknowledged ? ' &middot; Dismissed' : '') + '</div></div>'
+      + (a.acknowledged ? '' : '<button class="btn-ack" onclick="ackAlert(' + a.id + ')">Dismiss</button>')
+      + '</div>';
   }).join('');
 }
 async function ackAlert(id) {
-  await fetch('/api/notifications/'+id+'/ack',{method:'POST'});
+  await fetch('/api/notifications/' + id + '/ack', {method:'POST'});
   loadAlerts();
 }
 async function clearAlerts() {
   if (!confirm('Clear all alerts?')) return;
-  await fetch('/api/notifications',{method:'DELETE'});
+  await fetch('/api/notifications', {method:'DELETE'});
   loadAlerts();
 }
 
-// ── Main load ─────────────────────────────────────────────────────
-var lastCount=-1, lastMsg='';
+// ── Main refresh loop ─────────────────────────────────────────────
+var lastTime = '';
 async function load() {
   try {
-    var logs  =await fetch('/api/logs').then(function(r){return r.json();});
-    var stResp=await fetch('/api/state').then(function(r){return r.json();});
+    var logs    = await fetch('/api/logs').then(function(r){ return r.json(); });
+    var stResp  = await fetch('/api/state').then(function(r){ return r.json(); });
+    var latest  = logs.length ? logs[0] : null;
+    var s       = rowToSensor(latest);
 
-    document.getElementById('s-total').textContent  = logs.length||'0';
-    document.getElementById('s-last').textContent   = logs[0]?ago(logs[0].time):'&#8212;';
-    document.getElementById('s-device').textContent = logs[0]?logs[0].device:'&#8212;';
-
-    var grid=document.getElementById('sensor-grid');
-    if (!logs.length) {
-      grid.innerHTML='<div class="no-data"><div class="no-data-icon">&#127807;</div><div>Waiting for Arduino&#8230;</div></div>';
-    } else {
-      var msg=logs[0].message;
-      if (msg!==lastMsg||logs.length!==lastCount) { grid.innerHTML=renderCards(parseSensorMsg(msg)); lastMsg=msg; }
+    // Always render sensor cards (N/A when no data yet)
+    var timeKey = latest ? String(latest.time) : '';
+    if (timeKey !== lastTime) {
+      document.getElementById('sensor-grid').innerHTML = renderCards(s);
+      lastTime = timeKey;
     }
-    lastCount=logs.length;
 
-    document.getElementById('hist-body').innerHTML=renderHistory(logs);
-    setCtrlState('light', stResp.light);
-    setCtrlState('pump',  stResp.pump);
-    setCtrlState('buzzer',stResp.buzzer);
+    // Device status bar
+    var dot    = document.getElementById('db-dot');
+    var dbStat = document.getElementById('db-status');
+    if (latest) {
+      var age = (Date.now() - new Date(latest.time).getTime()) / 1000;
+      var online = age < 60;
+      dot.className    = online ? 'db-dot' : 'db-dot offline';
+      dbStat.textContent = online ? 'Online' : 'Last seen ' + ago(latest.time);
+      dbStat.style.color = online ? '#3dffa0' : '#f5a524';
+    } else {
+      dot.className = 'db-dot offline';
+      dbStat.textContent = 'Waiting for Arduino...';
+      dbStat.style.color = '#4a6080';
+    }
+    document.getElementById('s-device').textContent = latest ? latest.device : '&#8212;';
+    document.getElementById('s-last').textContent   = latest ? ago(latest.time) : '&#8212;';
+    document.getElementById('s-total').textContent  = String(logs.length);
+
+    // History & controls
+    document.getElementById('hist-body').innerHTML = renderHistory(logs);
+    setCtrlState('light',  stResp.light);
+    setCtrlState('pump',   stResp.pump);
+    setCtrlState('buzzer', stResp.buzzer);
 
     loadAlerts();
-  } catch(e){}
+  } catch(e) { console.error('load error:', e); }
 }
 async function clearLogs() {
   if (!confirm('Delete all logs?')) return;
-  await fetch('/api/logs',{method:'DELETE'});
-  lastCount=-1; lastMsg=''; load();
+  await fetch('/api/logs', {method:'DELETE'});
+  lastTime = ''; load();
 }
-function forceRefresh() { lastCount=-1; lastMsg=''; load(); }
+function forceRefresh() { lastTime = ''; load(); }
 
-window.addEventListener('load', function() { positionBar(); load(); setInterval(load,5000); });
+window.addEventListener('load', function() { positionBar(); renderCards(rowToSensor(null)); load(); setInterval(load, 5000); });
 window.addEventListener('resize', positionBar);
 </script>
 </body>
@@ -823,8 +912,7 @@ app.get('/', (req, res) => { res.setHeader('Content-Type','text/html'); res.end(
 initDB().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log('Server on port', PORT);
-    // Check notifications every 5 minutes
     setInterval(checkNotifications, 5 * 60 * 1000);
-    checkNotifications(); // run once on startup
+    checkNotifications();
   });
 }).catch(e => { console.error('[DB INIT FAILED]', e.message); process.exit(1); });
