@@ -1,15 +1,17 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   STATUS VIEW — plant status bar · autopilot controls note
+   STATUS VIEW — plant status bar · autopilot note
    ───────────────────────────────────────────────────────────────────────────── */
 
 /* ── Plant Status Bar ─────────────────────────────────────────────────────── */
 .plant-status-bar {
-  background: rgba(10,20,35,.7);
-  border: 1px solid #1a2d42;
-  border-radius: 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   padding: 1.25rem 1.5rem;
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
+  transition: border-color .25s;
 }
+.plant-status-bar:hover { border-color: var(--text-dim); }
 
 .psb-header {
   display: flex;
@@ -17,9 +19,9 @@
   gap: .85rem;
   margin-bottom: 1.1rem;
 }
-.psb-emoji { font-size: 2rem; line-height: 1; }
-.psb-name  { font-size: 15px; font-weight: 700; color: #cdd9e8; }
-.psb-sub   { font-size: 11px; color: #2a3f58; margin-top: 2px; }
+.psb-emoji { font-size: 2rem; line-height: 1; flex-shrink: 0; }
+.psb-name  { font-size: 15px; font-weight: 700; color: var(--text); }
+.psb-sub   { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 
 .psb-sensors {
   display: grid;
@@ -29,39 +31,44 @@
 
 .psb-sensor {
   border: 1px solid;
-  border-radius: 12px;
-  padding: .75rem .85rem;
+  border-radius: var(--radius-md);
+  padding: .75rem .9rem;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  transition: border-color .3s;
+  gap: 5px;
+  transition: border-color .2s;
 }
 .psb-sensor-top   { display: flex; align-items: center; gap: .35rem; }
 .psb-sensor-icon  { font-size: .9rem; flex-shrink: 0; }
 .psb-sensor-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .07em;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .08em;
   text-transform: uppercase;
-  color: #4a6080;
+  color: var(--text-muted);
   flex: 1;
 }
-.psb-sensor-badge { font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-.psb-sensor-val   { font-family: 'JetBrains Mono', monospace; font-size: 1.3rem; font-weight: 700; line-height: 1; }
-.psb-sensor-ideal { font-size: 10px; color: #2a3f58; }
+.psb-sensor-badge { font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.psb-sensor-val   { font-family: var(--mono); font-size: 1.3rem; font-weight: 700; line-height: 1; }
+.psb-sensor-ideal { font-size: 10px; color: var(--text-dim); }
 
-/* ── Autopilot active note above controls ─────────────────────────────────── */
+/* ── Autopilot active note ────────────────────────────────────────────────── */
 .ctrl-autopilot-note {
   background: rgba(61,255,160,.05);
-  border: 1px solid rgba(61,255,160,.15);
-  border-radius: 10px;
-  color: #3dffa0;
+  border: 1px solid rgba(61,255,160,.18);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
   font-size: 12px;
-  padding: .55rem 1rem;
-  margin-bottom: .85rem;
-  opacity: .85;
+  padding: .6rem 1.1rem;
+  margin-bottom: 1rem;
 }
 
-@media (max-width: 640px) {
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
   .psb-sensors { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .psb-sensors      { grid-template-columns: repeat(2, 1fr); gap: .5rem; }
+  .plant-status-bar { padding: 1rem; }
+  .psb-sensor-val   { font-size: 1.1rem; }
 }

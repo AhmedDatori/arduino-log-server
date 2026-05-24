@@ -4,7 +4,7 @@
 
 .reports-info {
   font-size: 12px;
-  color: #2a3f58;
+  color: var(--text-muted);
   margin-bottom: 1.5rem;
   line-height: 1.5;
 }
@@ -14,14 +14,14 @@
   align-items: center;
   gap: .5rem;
   padding: 3.5rem;
-  color: #4a6080;
+  color: var(--text-muted);
   text-align: center;
 }
 .report-error {
   background: rgba(255,77,109,.08);
   border: 1px solid rgba(255,77,109,.25);
-  border-radius: 10px;
-  color: #ff4d6d;
+  border-radius: var(--radius-sm);
+  color: var(--red);
   padding: .75rem 1rem;
   font-size: 13px;
   margin-bottom: 1rem;
@@ -31,13 +31,13 @@
 
 /* ── Report card ──────────────────────────────────────────────────────────── */
 .report-card {
-  background: rgba(10,20,35,.7);
-  border: 1px solid #1a2d42;
-  border-radius: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   overflow: hidden;
   transition: border-color .25s;
 }
-.report-card:hover { border-color: #2a3f58; }
+.report-card:hover { border-color: var(--text-dim); }
 
 /* Clickable header row */
 .report-card-header {
@@ -69,36 +69,49 @@
   white-space: nowrap;
   flex-shrink: 0;
 }
-.report-title   { font-size: 13px; font-weight: 600; color: #cdd9e8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.report-date    { font-size: 11px; color: #2a3f58; font-family: 'JetBrains Mono', monospace; white-space: nowrap; }
-.report-chevron { color: #4a6080; font-size: 14px; flex-shrink: 0; transition: transform .25s; }
+.report-title   {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.report-date    { font-size: 11px; color: var(--text-dim); font-family: var(--mono); white-space: nowrap; }
+.report-chevron { color: var(--text-muted); font-size: 14px; flex-shrink: 0; transition: transform .25s; }
 
 /* Expanded body */
-.report-body    { padding: 0 1.25rem 1.25rem; border-top: 1px solid #0f1e2e; display: flex; flex-direction: column; gap: 1rem; }
-.report-summary { font-size: 13px; color: #7a94b0; line-height: 1.65; padding-top: 1rem; }
+.report-body    {
+  padding: 0 1.25rem 1.25rem;
+  border-top: 1px solid var(--border-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.report-summary { font-size: 13px; color: var(--text-mid); line-height: 1.65; padding-top: 1rem; }
 
 .report-sections    { display: flex; flex-direction: column; gap: .55rem; }
 .report-section-row { display: flex; gap: .65rem; align-items: flex-start; }
-.report-section-icon  { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+.report-section-icon{ font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
 .report-section-label {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: .07em;
   text-transform: uppercase;
-  color: #2a3f58;
+  color: var(--text-dim);
   display: block;
   margin-bottom: 1px;
 }
-.report-section-text { font-size: 12px; color: #7a94b0; line-height: 1.5; margin: 0; }
+.report-section-text { font-size: 12px; color: var(--text-mid); line-height: 1.5; margin: 0; }
 
 /* Problem & action callouts */
 .report-problem {
   background: rgba(245,165,36,.06);
   border: 1px solid rgba(245,165,36,.2);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   padding: .85rem 1rem;
   font-size: 13px;
-  color: #cdd9e8;
+  color: var(--text);
   line-height: 1.55;
 }
 .report-problem-title {
@@ -106,17 +119,17 @@
   font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
-  color: #f5a524;
+  color: var(--amber);
   margin-bottom: .4rem;
 }
 
 .report-action {
   background: rgba(61,255,160,.05);
   border: 1px solid rgba(61,255,160,.18);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   padding: .85rem 1rem;
   font-size: 13px;
-  color: #cdd9e8;
+  color: var(--text);
   line-height: 1.55;
 }
 .report-action-title {
@@ -124,6 +137,13 @@
   font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
-  color: #3dffa0;
+  color: var(--accent);
   margin-bottom: .4rem;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .report-card-header { padding: .85rem 1rem; gap: .5rem; }
+  .report-body        { padding: 0 1rem 1rem; }
+  .report-title       { font-size: 12px; }
 }

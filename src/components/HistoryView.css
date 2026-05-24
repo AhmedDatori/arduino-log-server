@@ -2,33 +2,56 @@
    HISTORY VIEW — scrollable log table with color-coded sensor values
    ───────────────────────────────────────────────────────────────────────────── */
 
-.table-wrap { overflow-x: auto; }
+.table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-dim);
+  background: rgba(6,11,17,.4);
+}
 
 table { width: 100%; border-collapse: collapse; }
 
 th {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .08em;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .09em;
   text-transform: uppercase;
-  color: #2a3f58;
-  padding: .6rem .8rem;
-  border-bottom: 1px solid #0f1e2e;
+  color: var(--text-muted);
+  padding: .65rem .9rem;
+  border-bottom: 1px solid var(--border-dim);
   text-align: left;
   white-space: nowrap;
+  background: rgba(6,11,17,.5);
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
-td { padding: .55rem .8rem; border-bottom: 1px solid rgba(15,30,46,.6); font-size: 12px; }
+
+td {
+  padding: .55rem .9rem;
+  border-bottom: 1px solid rgba(15,30,46,.5);
+  font-size: 12px;
+}
+tr:last-child td { border-bottom: none; }
 tr:hover td { background: rgba(255,255,255,.02); }
 
-.cell-num  { color: #2a3f58; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
-.cell-time { font-family: 'JetBrains Mono', monospace; font-size: 11px; white-space: nowrap; }
-.cell-ago  { display: block; font-size: 10px; color: #2a3f58; }
-.cell-dev  { color: #7a94b0; font-size: 11px; }
-.empty-cell { text-align: center; color: #2a3f58; padding: 3rem; }
+.cell-num  { color: var(--text-dim); font-family: var(--mono); font-size: 11px; }
+.cell-time { font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+.cell-ago  { display: block; font-size: 10px; color: var(--text-dim); }
+.cell-dev  { color: var(--text-mid); font-size: 11px; }
+.empty-cell { text-align: center; color: var(--text-dim); padding: 3rem; }
 
 /* Color-value classes for sensor readings */
-.cv-g { color: #3dffa0; }  /* good / green  */
-.cv-a { color: #f5a524; }  /* warning / amber */
-.cv-r { color: #ff4d6d; }  /* danger / red   */
-.cv-b { color: #38b2f8; }  /* info / blue    */
-.cv-m { color: #4a6080; }  /* muted / missing */
+.cv-g { color: var(--accent); }   /* good / green  */
+.cv-a { color: var(--amber); }    /* warning / amber */
+.cv-r { color: var(--red); }      /* danger / red   */
+.cv-b { color: var(--blue); }     /* info / blue    */
+.cv-m { color: var(--text-muted); } /* muted / missing */
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  th, td { padding: .5rem .65rem; }
+}
+@media (max-width: 480px) {
+  th, td { padding: .45rem .5rem; font-size: 11px; }
+}

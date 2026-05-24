@@ -7,9 +7,9 @@
 
 .mode-btn {
   flex: 1;
-  background: rgba(10,20,35,.7);
-  border: 1px solid #1a2d42;
-  border-radius: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   padding: .85rem 1rem;
   cursor: pointer;
   display: flex;
@@ -20,19 +20,45 @@
   transition: border-color .2s, background .2s, box-shadow .2s;
   outline: none;
   user-select: none;
+  position: relative;
+  overflow: hidden;
 }
-.mode-btn:hover:not(:disabled):not(.active) { border-color: #2a3f58; background: rgba(15,28,48,.85); }
+.mode-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(255,255,255,.025) 0%, transparent 70%);
+  pointer-events: none;
+}
+.mode-btn:hover:not(:disabled):not(.active) {
+  border-color: var(--text-dim);
+  background: var(--bg-card-hover);
+}
 .mode-btn:disabled { opacity: .6; cursor: wait; }
-.mode-btn.active   { border-color: rgba(61,255,160,.45); background: rgba(61,255,160,.06); box-shadow: 0 0 20px rgba(61,255,160,.08); }
+.mode-btn.active {
+  border-color: rgba(61,255,160,.45);
+  background: rgba(61,255,160,.06);
+  box-shadow: 0 0 20px rgba(61,255,160,.08);
+}
 
 .mode-btn-icon  { font-size: 1.4rem; line-height: 1; }
-.mode-btn-label { font-size: 12px; font-weight: 700; letter-spacing: .06em; color: #7a94b0; transition: color .2s; }
-.mode-btn.active .mode-btn-label { color: #3dffa0; }
-.mode-btn-desc  { font-size: 10px; color: #2a3f58; line-height: 1.3; }
+.mode-btn-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  color: var(--text-muted);
+  transition: color .2s;
+}
+.mode-btn.active .mode-btn-label { color: var(--accent); }
+.mode-btn-desc  { font-size: 10px; color: var(--text-dim); line-height: 1.3; }
 
-@media (max-width: 640px) {
-  .mode-selector-row { gap: .5rem; }
-  .mode-btn          { padding: .65rem .5rem; }
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .mode-btn-desc { display: none; }
+}
+@media (max-width: 480px) {
+  .mode-selector-row { gap: .4rem; }
+  .mode-btn          { padding: .65rem .4rem; }
   .mode-btn-icon     { font-size: 1.2rem; }
-  .mode-btn-desc     { display: none; }
+  .mode-btn-label    { font-size: 11px; }
 }

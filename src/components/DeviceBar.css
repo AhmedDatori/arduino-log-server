@@ -1,34 +1,35 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   DEVICE BAR — status strip below header: online status · device · plant chip
+   DEVICE BAR — status strip below header
    ───────────────────────────────────────────────────────────────────────────── */
 
 .device-bar {
-  background: rgba(255,255,255,.02);
-  border-bottom: 1px solid #0f1e2e;
+  background: rgba(255,255,255,.015);
+  border-bottom: 1px solid var(--border-dim);
 }
+
 .device-bar-inner {
-  max-width: 1180px;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: .6rem 1.5rem;
+  padding: .55rem 2rem;
   display: flex;
   align-items: center;
-  gap: 2rem;
+  gap: 1.75rem;
   flex-wrap: wrap;
+  row-gap: .4rem;
 }
 
-.db-item  { display: flex; align-items: center; gap: 6px; }
+.db-item  { display: flex; align-items: center; gap: 5px; }
 .db-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .08em;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .1em;
   text-transform: uppercase;
-  color: #2a3f58;
+  color: var(--text-dim);
 }
-.db-val       { color: #7a94b0; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
-.db-val.green { color: #3dffa0; }
-.db-val.amber { color: #f5a524; }
+.db-val       { color: var(--text-mid); font-family: var(--mono); font-size: 11px; }
+.db-val.green { color: var(--accent); }
+.db-val.amber { color: var(--amber); }
 
-/* Online / offline dot */
 .status-dot {
   width: 6px;
   height: 6px;
@@ -36,13 +37,15 @@
   display: inline-block;
   flex-shrink: 0;
 }
-.status-dot.online  { background: #3dffa0; box-shadow: 0 0 6px #3dffa0; animation: blink 1.8s ease-in-out infinite; }
-.status-dot.offline { background: #ff4d6d; }
+.status-dot.online  { background: var(--accent); box-shadow: 0 0 6px var(--accent); animation: blink 1.8s ease-in-out infinite; }
+.status-dot.offline { background: var(--red); }
 
-/* Active plant chip — pushed to the right */
-.db-plant-chip  { margin-left: auto; }
-.db-plant-emoji { font-size: 1rem; }
+.db-plant-chip { margin-left: auto; display: flex; align-items: center; gap: 5px; }
+.db-plant-emoji { font-size: .9rem; }
 
-@media (max-width: 640px) {
-  .db-plant-chip { margin-left: 0; }
+@media (max-width: 1024px) { .device-bar-inner { padding: .55rem 1.5rem; } }
+@media (max-width: 768px)  { .device-bar-inner { padding: .5rem 1rem; gap: 1.25rem; } }
+@media (max-width: 480px) {
+  .device-bar-inner { gap: .85rem; }
+  .db-plant-chip    { margin-left: 0; }
 }
