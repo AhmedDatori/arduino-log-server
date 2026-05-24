@@ -164,7 +164,7 @@ app.post('/api/chat', async (req, res) => {
 
     await pool.query('INSERT INTO conversations(role,content) VALUES($1,$2)', ['user', message]);
 
-    const model  = genai.getGenerativeModel({ model: 'gemini-3.1-flash-lite', systemInstruction: sys });
+    const model  = genai.getGenerativeModel({ model: 'gemini-2.0-flash-lite', systemInstruction: sys });
     const chat   = model.startChat({ history, generationConfig: { maxOutputTokens: 512 } });
     const result = await chat.sendMessage(message);
     const text   = result.response.text();
