@@ -4,7 +4,8 @@ const path    = require('path');
 
 const app      = express();
 const PORT     = process.env.PORT || 3000;
-const DB_FILE  = path.join(__dirname, 'logs.json');
+// Use /tmp if available (writable on most hosts), otherwise fall back to __dirname
+const DB_FILE  = path.join(process.env.LOGS_PATH || __dirname, 'logs.json');
 const MAX_LOGS = 500;
 
 // ── Simple JSON "database" (no native modules needed) ─────────────
@@ -239,11 +240,13 @@ app.get('/', (req, res) => {
 });
 
 // ── Start ─────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+// Bind to 0.0.0.0 so Hostinger/reverse-proxy can reach the process
+app.listen(PORT, '0.0.0.0', () => {
   console.log('');
   console.log('  📡  Arduino Log Server');
   console.log('  ─────────────────────────────────');
-  console.log(\`  Local:   http://localhost:\${PORT}\`);
+  console.log(\`  Listening on 0.0.0.0:\${PORT}\`);
+  console.log(\`  Logs file: \${DB_FILE}\`);
   console.log('');
   console.log('  POST /log        ← Arduino sends here');
   console.log('  GET  /api/logs   ← JSON feed');
