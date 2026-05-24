@@ -24,8 +24,16 @@ export const postControl  = (device, value) =>
 // ─── Chat ──────────────────────────────────────────────────────────
 export const fetchConversations  = () => request('/api/conversations');
 export const deleteConversations = () => request('/api/conversations', { method: 'DELETE' });
-export const sendChatMessage     = (message) =>
-  request('/api/chat', { method: 'POST', body: formBody({ message }) });
+
+// Chat returns JSON even on error (the error field shows the real reason)
+export async function sendChatMessage(message) {
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    body:   formBody({ message }),
+  });
+  const data = await res.json().catch(() => ({ error: `Server error ${res.status}` }));
+  return data; // caller reads data.response or data.error
+}
 
 // ─── Notifications ─────────────────────────────────────────────────
 export const fetchNotifications  = () => request('/api/notifications');
