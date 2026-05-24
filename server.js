@@ -1,21 +1,36 @@
 const express = require('express');
-const Database = require('better-sqlite3');
+const fs      = require('fs');
+const path    = require('path');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+const app      = express();
+const PORT     = process.env.PORT || 3000;
+const DB_FILE  = path.join(__dirname, 'logs.json');
+const MAX_LOGS = 500;
 
-// ── Database setup ────────────────────────────────────────────────
-const db = new Database('logs.db');
+// ── Simple JSON "database" (no native modules needed) ─────────────
+function readLogs() {
+  try { return JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); }
+  catch { return []; }
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS logs (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    message    TEXT    NOT NULL,
-    device     TEXT    DEFAULT 'ESP-01',
-    ip_address TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
+function saveLogs(logs) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(logs));
+}
+
+function addLog(message, device, ip) {
+  const logs  = readLogs();
+  const entry = {
+    id:         Date.now(),
+    message:    message  || '(no message)',
+    device:     device   || 'ESP-01',
+    ip_address: ip       || 'unknown',
+    created_at: new Date().toISOString()
+  };
+  logs.unshift(entry);                    // newest first
+  if (logs.length > MAX_LOGS) logs.length = MAX_LOGS;
+  saveLogs(logs);
+  return entry;
+}
 
 // ── Middleware ────────────────────────────────────────────────────
 app.use(express.json());
@@ -23,30 +38,23 @@ app.use(express.urlencoded({ extended: true }));
 
 // ── POST /log  — Arduino sends data here ─────────────────────────
 app.post('/log', (req, res) => {
-  const message    = req.body.message  || '(no message)';
-  const device     = req.body.device   || 'ESP-01';
-  const ip_address = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const message = req.body.message;
+  const device  = req.body.device;
+  const ip      = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-  const result = db
-    .prepare('INSERT INTO logs (message, device, ip_address) VALUES (?, ?, ?)')
-    .run(message, device, ip_address);
-
-  console.log(`[LOG #${result.lastInsertRowid}] ${device} → ${message}`);
-
-  res.json({ success: true, id: result.lastInsertRowid });
+  const entry = addLog(message, device, ip);
+  console.log(`[LOG #${entry.id}] ${entry.device} → ${entry.message}`);
+  res.json({ success: true, id: entry.id });
 });
 
 // ── GET /api/logs  — JSON feed for the UI ────────────────────────
 app.get('/api/logs', (req, res) => {
-  const logs = db
-    .prepare('SELECT * FROM logs ORDER BY created_at DESC LIMIT 100')
-    .all();
-  res.json(logs);
+  res.json(readLogs().slice(0, 100));
 });
 
 // ── DELETE /api/logs  — clear all logs ───────────────────────────
 app.delete('/api/logs', (req, res) => {
-  db.prepare('DELETE FROM logs').run();
+  saveLogs([]);
   res.json({ success: true });
 });
 
@@ -80,12 +88,7 @@ app.get('/', (req, res) => {
       gap: 1rem;
     }
 
-    h1 {
-      font-size: 1.6rem;
-      color: #38bdf8;
-      letter-spacing: -0.3px;
-    }
-
+    h1 { font-size: 1.6rem; color: #38bdf8; letter-spacing: -0.3px; }
     h1 span { opacity: 0.6; font-weight: 400; }
 
     .badge {
@@ -121,7 +124,6 @@ app.get('/', (req, res) => {
     .btn-refresh { background: #1d4ed8; color: #fff; }
     .btn-clear   { background: #7f1d1d; color: #fca5a5; }
 
-    /* Log list */
     #log-list { display: flex; flex-direction: column; gap: 0.6rem; }
 
     .entry {
@@ -138,45 +140,23 @@ app.get('/', (req, res) => {
 
     @keyframes fadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
 
-    .entry-id {
-      color: #475569;
-      font-size: 0.72rem;
-      padding-top: 2px;
-      text-align: right;
-    }
-
-    .entry-body {}
-
-    .entry-msg {
-      color: #f1f5f9;
-      font-size: 0.9rem;
-      word-break: break-all;
-      margin-bottom: 5px;
-    }
+    .entry-id   { color: #475569; font-size: 0.72rem; padding-top: 2px; text-align: right; }
+    .entry-msg  { color: #f1f5f9; font-size: 0.9rem; word-break: break-all; margin-bottom: 5px; }
 
     .entry-meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.8rem;
-      font-size: 0.72rem;
-      color: #475569;
+      display: flex; flex-wrap: wrap;
+      gap: 0.8rem; font-size: 0.72rem; color: #475569;
     }
 
     .entry-meta .device { color: #7dd3fc; }
     .entry-meta .ip     { color: #86efac; }
 
     .empty {
-      text-align: center;
-      color: #334155;
-      padding: 4rem 0;
-      font-size: 0.95rem;
+      text-align: center; color: #334155;
+      padding: 4rem 0; font-size: 0.95rem;
     }
 
-    #count-badge {
-      font-size: 0.8rem;
-      color: #64748b;
-      margin-bottom: 1rem;
-    }
+    #count-badge { font-size: 0.8rem; color: #64748b; margin-bottom: 1rem; }
   </style>
 </head>
 <body>
@@ -200,21 +180,20 @@ app.get('/', (req, res) => {
 </div>
 
 <script>
-  function esc(t) {
-    return String(t ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
+  const esc = t => String(t ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const fmt = iso => { try { return new Date(iso).toLocaleString(); } catch { return iso; } };
 
-  function fmt(iso) {
-    try { return new Date(iso).toLocaleString(); } catch { return iso; }
-  }
+  let lastCount = -1;
 
   async function load() {
     try {
-      const r    = await fetch('/api/logs');
-      const logs = await r.json();
+      const logs = await fetch('/api/logs').then(r => r.json());
 
       document.getElementById('status').textContent =
         logs.length + ' log' + (logs.length !== 1 ? 's' : '') + ' · refreshes every 5 s';
+
+      if (logs.length === lastCount) return;   // nothing changed
+      lastCount = logs.length;
 
       document.getElementById('count-badge').textContent =
         logs.length ? 'Showing latest ' + logs.length + ' entries' : '';
@@ -226,10 +205,10 @@ app.get('/', (req, res) => {
         return;
       }
 
-      list.innerHTML = logs.map(l => \`
+      list.innerHTML = logs.map((l, i) => \`
         <div class="entry">
-          <div class="entry-id">#\${esc(l.id)}</div>
-          <div class="entry-body">
+          <div class="entry-id">\${i + 1}</div>
+          <div>
             <div class="entry-msg">\${esc(l.message)}</div>
             <div class="entry-meta">
               <span class="device">📟 \${esc(l.device)}</span>
@@ -248,6 +227,7 @@ app.get('/', (req, res) => {
   async function clearLogs() {
     if (!confirm('Delete all logs?')) return;
     await fetch('/api/logs', { method: 'DELETE' });
+    lastCount = -1;
     load();
   }
 
@@ -263,7 +243,7 @@ app.listen(PORT, () => {
   console.log('');
   console.log('  📡  Arduino Log Server');
   console.log('  ─────────────────────────────────');
-  console.log(`  Local:   http://localhost:${PORT}`);
+  console.log(\`  Local:   http://localhost:\${PORT}\`);
   console.log('');
   console.log('  POST /log        ← Arduino sends here');
   console.log('  GET  /api/logs   ← JSON feed');
