@@ -19,7 +19,7 @@ const pool = new Pool({
   idleTimeoutMillis:       30000,
   connectionTimeoutMillis: 5000
 });
-
+ //s
 // ── Google Gemini ─────────────────────────────────────────────────
 const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
