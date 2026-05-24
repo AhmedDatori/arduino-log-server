@@ -1,7 +1,7 @@
 import React from 'react';
 import { ago } from '../utils';
 
-export default function DeviceBar({ latest, total }) {
+export default function DeviceBar({ latest, total, plant }) {
   const isOnline = latest
     ? (Date.now() - new Date(latest.time).getTime()) < 60_000
     : false;
@@ -39,6 +39,14 @@ export default function DeviceBar({ latest, total }) {
           <span className="db-label">Logs</span>
           <span className="db-val">{total}</span>
         </div>
+
+        {plant && (
+          <div className="db-item db-plant-chip">
+            <span className="db-plant-emoji">{plant.emoji}</span>
+            <span className="db-label">Plant</span>
+            <span className="db-val green">{plant.name}</span>
+          </div>
+        )}
 
       </div>
     </div>

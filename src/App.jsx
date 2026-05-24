@@ -7,7 +7,7 @@ import ReportsView from './components/ReportsView';
 import PlantsView  from './components/PlantsView';
 import ChatView    from './components/ChatView';
 import AlertsView  from './components/AlertsView';
-import { fetchLogs, fetchState, fetchNotifications } from './api';
+import { fetchLogs, fetchState, fetchNotifications, fetchPlants } from './api';
 
 const REFRESH_MS = 5_000;
 
@@ -16,18 +16,21 @@ export default function App() {
   const [logs,    setLogs]    = useState([]);
   const [state,   setState]   = useState({ light: false, pump: false, buzzer: false });
   const [alerts,  setAlerts]  = useState([]);
+  const [plant,   setPlant]   = useState(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [logsData, stateData, alertsData] = await Promise.all([
+      const [logsData, stateData, alertsData, plantsData] = await Promise.all([
         fetchLogs(),
         fetchState(),
         fetchNotifications(),
+        fetchPlants(),
       ]);
       setLogs(logsData);
       setState(stateData);
       setAlerts(alertsData);
+      setPlant(plantsData.find(p => p.is_active) ?? null);
     } catch (err) {
       console.error('Refresh error:', err.message);
     } finally {
@@ -53,13 +56,14 @@ export default function App() {
         unreadCount={unreadCount}
       />
 
-      <DeviceBar latest={latest} total={logs.length} />
+      <DeviceBar latest={latest} total={logs.length} plant={plant} />
 
       <main>
         {tab === 'status' && (
           <StatusView
             latest={latest}
             state={state}
+            plant={plant}
             onStateChange={setState}
             onLogsCleared={refresh}
             loading={loading}
