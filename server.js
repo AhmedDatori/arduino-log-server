@@ -98,8 +98,105 @@ async function initDB() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS health_scores (
+      id         SERIAL      PRIMARY KEY,
+      score      INT         NOT NULL,
+      status     TEXT        NOT NULL,
+      advice     TEXT,
+      breakdown  JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
   console.log('[DB] All tables ready');
 }
+
+// ─── AI Health Score ───────────────────────────────────────────────
+async function computeHealthScore() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const [logsResult, state] = await Promise.all([
+    pool.query('SELECT * FROM logs ORDER BY time DESC LIMIT 1'),
+    getActuatorState(),
+  ]);
+
+  const latest = logsResult.rows[0];
+  if (!latest) return null;
+
+  const prompt = `You are evaluating the health of a potted plant using IoT sensor data.
+
+Current readings:
+- Soil moisture: ${latest.soil ?? 'N/A'}%
+- Water level: ${latest.water ?? 'N/A'} raw (0-1023; <200=empty, <500=low, <800=medium, ≥800=full)
+- Light: ${latest.light ?? 'N/A'}%
+- Temperature: ${latest.temp ?? 'N/A'}°C
+- Humidity: ${latest.hum ?? 'N/A'}%
+- Grow light: ${state.light ? 'ON' : 'OFF'}, Pump: ${state.pump ? 'ON' : 'OFF'}
+
+Respond ONLY with valid JSON, no markdown, no explanation:
+{
+  "score": <integer 0-100>,
+  "status": "<max 5 words, e.g. 'Healthy', 'Critical: needs water'>",
+  "advice": "<one practical sentence>",
+  "breakdown": {
+    "soil":  { "score": <0-20>, "note": "<short>" },
+    "water": { "score": <0-20>, "note": "<short>" },
+    "light": { "score": <0-20>, "note": "<short>" },
+    "temp":  { "score": <0-20>, "note": "<short>" },
+    "hum":   { "score": <0-20>, "note": "<short>" }
+  }
+}`;
+
+  const geminiRes = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+    {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 512, temperature: 0.2 },
+      }),
+    }
+  );
+
+  const data = await geminiRes.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON in Gemini response');
+
+  const result = JSON.parse(match[0]);
+  await pool.query(
+    'INSERT INTO health_scores (score, status, advice, breakdown) VALUES ($1, $2, $3, $4)',
+    [result.score, result.status, result.advice, JSON.stringify(result.breakdown)]
+  );
+  console.log(`[HEALTH] Score: ${result.score}/100 — ${result.status}`);
+  return result;
+}
+
+app.get('/api/health', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM health_scores ORDER BY created_at DESC LIMIT 1'
+    );
+    res.json(rows[0] ?? null);
+  } catch (err) {
+    console.error('[GET /api/health]', err.message);
+    res.status(500).json(null);
+  }
+});
+
+app.post('/api/health/refresh', async (req, res) => {
+  try {
+    const result = await computeHealthScore();
+    if (!result) return res.status(503).json({ error: 'No data or API key missing' });
+    res.json(result);
+  } catch (err) {
+    console.error('[POST /api/health/refresh]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─── Arduino POST /log ─────────────────────────────────────────────
 app.post('/log', async (req, res) => {
@@ -373,8 +470,16 @@ initDB()
   .then(() => {
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`Plant Monitor running on port ${PORT}`);
+
+      // Notifications every 5 minutes
       setInterval(checkNotifications, COOLDOWN_MS);
       checkNotifications();
+
+      // Health score auto-refresh every 1 hour
+      const HEALTH_INTERVAL_MS = 60 * 60 * 1000;
+      setInterval(() => computeHealthScore().catch(e => console.error('[HEALTH auto]', e.message)), HEALTH_INTERVAL_MS);
+      // Compute one score on startup (after 10s to let DB settle)
+      setTimeout(() => computeHealthScore().catch(e => console.error('[HEALTH init]', e.message)), 10_000);
     });
   })
   .catch(err => {

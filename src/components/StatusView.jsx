@@ -1,6 +1,7 @@
 import React from 'react';
 import { GaugeCard, BigCard } from './SensorCard';
 import ControlCard from './ControlCard';
+import HealthScore from './HealthScore';
 import { waterInfo, soilInfo, lightInfo, tempInfo, humInfo } from '../utils';
 
 export default function StatusView({ latest, state, onStateChange, loading }) {
@@ -13,6 +14,8 @@ export default function StatusView({ latest, state, onStateChange, loading }) {
 
   return (
     <div className="view-wrap">
+
+      <HealthScore />
 
       <h2 className="section-title">Sensors</h2>
       <div className="sensor-grid">
