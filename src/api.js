@@ -35,6 +35,21 @@ export async function sendChatMessage(message) {
   return data; // caller reads data.response or data.error
 }
 
+// ─── Plants ────────────────────────────────────────────────────────
+export const fetchPlants  = () => request('/api/plants');
+export const selectPlant  = (id) => request(`/api/plants/${id}/select`, { method: 'POST' });
+export const deletePlant  = (id) => request(`/api/plants/${id}`, { method: 'DELETE' });
+export const createPlant  = (data) => request('/api/plants', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(data),
+});
+export const updatePlant  = (id, data) => request(`/api/plants/${id}`, {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(data),
+});
+
 // ─── Reports ───────────────────────────────────────────────────────
 export const fetchReports    = () => request('/api/reports');
 export const generateReport  = () => request('/api/reports/generate', { method: 'POST' });

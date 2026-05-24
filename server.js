@@ -32,6 +32,13 @@ async function getActuatorState() {
   return rows[0] ?? { light: false, pump: false, buzzer: false };
 }
 
+async function getActivePlant() {
+  const { rows } = await pool.query(
+    'SELECT * FROM plant_profiles WHERE is_active = TRUE LIMIT 1'
+  );
+  return rows[0] ?? null;
+}
+
 function parseSensorMessage(msg) {
   const kv = {};
   (msg || '').split(',').forEach(pair => {
@@ -128,6 +135,44 @@ async function initDB() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS plant_profiles (
+      id         SERIAL      PRIMARY KEY,
+      name       TEXT        NOT NULL,
+      emoji      TEXT        NOT NULL DEFAULT '🌱',
+      soil_min   INT         NOT NULL DEFAULT 30,
+      soil_max   INT         NOT NULL DEFAULT 70,
+      temp_min   FLOAT       NOT NULL DEFAULT 15,
+      temp_max   FLOAT       NOT NULL DEFAULT 30,
+      hum_min    INT         NOT NULL DEFAULT 40,
+      hum_max    INT         NOT NULL DEFAULT 70,
+      light_min  INT         NOT NULL DEFAULT 30,
+      light_max  INT         NOT NULL DEFAULT 80,
+      notes      TEXT,
+      is_preset  BOOLEAN     NOT NULL DEFAULT FALSE,
+      is_active  BOOLEAN     NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  // Seed preset plants only if none exist yet
+  const { rows: presetCheck } = await pool.query(
+    'SELECT COUNT(*) FROM plant_profiles WHERE is_preset = TRUE'
+  );
+  if (Number(presetCheck[0].count) === 0) {
+    await pool.query(`
+      INSERT INTO plant_profiles (name, emoji, soil_min, soil_max, temp_min, temp_max, hum_min, hum_max, light_min, light_max, notes, is_preset, is_active) VALUES
+        ('Tomato',    '🍅', 50, 70, 20, 28, 50, 70, 60, 90,  'Needs consistent moisture and warmth.',        TRUE, TRUE),
+        ('Mint',      '🌿', 60, 80, 15, 25, 50, 70, 30, 60,  'Prefers shade and moist soil.',                TRUE, FALSE),
+        ('Basil',     '🌱', 40, 60, 18, 27, 40, 60, 50, 80,  'Sensitive to cold and overwatering.',          TRUE, FALSE),
+        ('Lettuce',   '🥬', 60, 80, 15, 22, 50, 70, 30, 60,  'Cool weather crop, needs consistent moisture.',TRUE, FALSE),
+        ('Cactus',    '🌵', 10, 30, 20, 35, 10, 30, 70, 100, 'Minimal water, loves heat and bright light.',  TRUE, FALSE),
+        ('Rose',      '🌹', 40, 65, 15, 27, 40, 60, 60, 90,  'Well-drained soil, regular watering.',         TRUE, FALSE),
+        ('Sunflower', '🌻', 40, 65, 20, 30, 40, 65, 70, 100, 'Full sun, moderate water.',                    TRUE, FALSE)
+    `);
+    console.log('[DB] Preset plants seeded');
+  }
+
   console.log('[DB] All tables ready');
 }
 
@@ -136,16 +181,21 @@ async function computeHealthScore() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
 
-  const [logsResult, state] = await Promise.all([
+  const [logsResult, state, plant] = await Promise.all([
     pool.query('SELECT * FROM logs ORDER BY time DESC LIMIT 1'),
     getActuatorState(),
+    getActivePlant(),
   ]);
 
   const latest = logsResult.rows[0];
   if (!latest) return null;
 
-  const prompt = `You are evaluating the health of a potted plant using IoT sensor data.
+  const plantCtx = plant
+    ? `\nPlant type: ${plant.emoji} ${plant.name}\nIdeal ranges — Soil: ${plant.soil_min}–${plant.soil_max}%, Temp: ${plant.temp_min}–${plant.temp_max}°C, Humidity: ${plant.hum_min}–${plant.hum_max}%, Light: ${plant.light_min}–${plant.light_max}%\n`
+    : '';
 
+  const prompt = `You are evaluating the health of a potted plant using IoT sensor data.
+${plantCtx}
 Current readings:
 - Soil moisture: ${latest.soil ?? 'N/A'}%
 - Water level: ${latest.water ?? 'N/A'} raw (0-1023; <200=empty, <500=low, <800=medium, ≥800=full)
@@ -249,18 +299,23 @@ async function generateDailyReport() {
   const d = rows[0];
   if (!d || Number(d.readings) === 0) return null;
 
+  const plant   = await getActivePlant();
   const dateStr = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  const plantCtx = plant
+    ? `Plant type: ${plant.emoji} ${plant.name}\nIdeal ranges — Soil: ${plant.soil_min}–${plant.soil_max}%, Temp: ${plant.temp_min}–${plant.temp_max}°C, Humidity: ${plant.hum_min}–${plant.hum_max}%, Light: ${plant.light_min}–${plant.light_max}%\n\n`
+    : '';
 
   const prompt = `You are writing a daily greenhouse report for a plant owner.
 
-Data from the last 24 hours (${d.readings} readings from ${start.toISOString()} to ${now.toISOString()}):
+${plantCtx}Data from the last 24 hours (${d.readings} readings):
 - Soil moisture:  avg ${d.avg_soil}%,  min ${d.min_soil}%,  max ${d.max_soil}%
 - Water level:    avg ${d.avg_water} raw (0-1023; <200=empty,<500=low,<800=medium,≥800=full), min ${d.min_water}, max ${d.max_water}
 - Light:          avg ${d.avg_light}%, min ${d.min_light}%, max ${d.max_light}%
 - Temperature:    avg ${d.avg_temp}°C, min ${d.min_temp}°C, max ${d.max_temp}°C
 - Humidity:       avg ${d.avg_hum}%,  min ${d.min_hum}%,  max ${d.max_hum}%
 
-Write in a clear, friendly tone for a non-technical plant owner.
+Write in a clear, friendly tone for a non-technical plant owner. Compare readings against the ideal ranges${plant ? ` for ${plant.name}` : ''} and mention when conditions are outside the ideal range.
 Respond ONLY with valid JSON, no markdown:
 {
   "title": "Daily Report — ${dateStr}",
@@ -420,14 +475,15 @@ app.post('/api/chat', async (req, res) => {
       });
     }
 
-    const [logsResult, state, historyResult] = await Promise.all([
+    const [logsResult, state, historyResult, plant] = await Promise.all([
       pool.query('SELECT * FROM logs ORDER BY time DESC LIMIT 5'),
       getActuatorState(),
       pool.query('SELECT role, content FROM conversations ORDER BY created_at DESC LIMIT 30'),
+      getActivePlant(),
     ]);
 
     const latest       = logsResult.rows[0];
-    const systemPrompt = buildSystemPrompt(latest, state);
+    const systemPrompt = buildSystemPrompt(latest, state, plant);
 
     // Build strictly alternating user/model history for Gemini
     const history = [];
@@ -477,19 +533,33 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-function buildSystemPrompt(latest, state) {
+function buildSystemPrompt(latest, state, plant) {
   let p = 'You are a concise AI assistant for an Arduino IoT plant monitoring system.\n\n';
-  if (latest) {
-    p += 'Latest sensor reading:\n';
-    p += `  Water level : ${latest.water ?? 'N/A'} (raw 0-1023, <200=empty)\n`;
-    p += `  Soil moisture: ${latest.soil  ?? 'N/A'}%\n`;
-    p += `  Light        : ${latest.light ?? 'N/A'}%\n`;
-    p += `  Temperature  : ${latest.temp  ?? 'N/A'}C\n`;
-    p += `  Humidity     : ${latest.hum   ?? 'N/A'}%\n`;
-    p += `  Recorded at  : ${latest.time}\n\n`;
+
+  if (plant) {
+    p += `Currently monitoring: ${plant.emoji} ${plant.name}\n`;
+    p += `Ideal conditions for ${plant.name}:\n`;
+    p += `  Soil moisture: ${plant.soil_min}–${plant.soil_max}%\n`;
+    p += `  Temperature:   ${plant.temp_min}–${plant.temp_max}°C\n`;
+    p += `  Humidity:      ${plant.hum_min}–${plant.hum_max}%\n`;
+    p += `  Light:         ${plant.light_min}–${plant.light_max}%\n`;
+    if (plant.notes) p += `  Notes: ${plant.notes}\n`;
+    p += '\n';
   }
+
+  if (latest) {
+    p += 'Current sensor readings:\n';
+    p += `  Water level:   ${latest.water ?? 'N/A'} (raw 0-1023, <200=empty)\n`;
+    p += `  Soil moisture: ${latest.soil  ?? 'N/A'}%\n`;
+    p += `  Light:         ${latest.light ?? 'N/A'}%\n`;
+    p += `  Temperature:   ${latest.temp  ?? 'N/A'}°C\n`;
+    p += `  Humidity:      ${latest.hum   ?? 'N/A'}%\n`;
+    p += `  Recorded at:   ${latest.time}\n\n`;
+  }
+
   p += `Actuators: Light=${state.light?'ON':'OFF'}, Pump=${state.pump?'ON':'OFF'}, Buzzer=${state.buzzer?'ON':'OFF'}\n\n`;
-  p += 'Be brief and practical. Focus on plant health.';
+  p += 'Be brief and practical.';
+  if (plant) p += ` Always compare readings against the ideal ranges for ${plant.name} and give plant-specific advice.`;
   return p;
 }
 
@@ -586,6 +656,85 @@ async function checkNotifications() {
     console.error('[checkNotifications]', err.message);
   }
 }
+
+// ─── Plant Profiles API ────────────────────────────────────────────
+app.get('/api/plants', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM plant_profiles ORDER BY is_preset DESC, id ASC'
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json([]);
+  }
+});
+
+app.post('/api/plants/:id/select', async (req, res) => {
+  try {
+    await pool.query('UPDATE plant_profiles SET is_active = FALSE');
+    await pool.query('UPDATE plant_profiles SET is_active = TRUE WHERE id = $1', [req.params.id]);
+    const { rows } = await pool.query('SELECT * FROM plant_profiles WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    console.log(`[PLANT] Active plant: ${rows[0].emoji} ${rows[0].name}`);
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/plants', async (req, res) => {
+  try {
+    const { name, emoji, soil_min, soil_max, temp_min, temp_max, hum_min, hum_max, light_min, light_max, notes } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required' });
+    const { rows } = await pool.query(
+      `INSERT INTO plant_profiles (name, emoji, soil_min, soil_max, temp_min, temp_max, hum_min, hum_max, light_min, light_max, notes, is_preset)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,FALSE) RETURNING *`,
+      [name.trim(), emoji || '🌱',
+       Number(soil_min)||30, Number(soil_max)||70,
+       Number(temp_min)||15, Number(temp_max)||30,
+       Number(hum_min)||40,  Number(hum_max)||70,
+       Number(light_min)||30, Number(light_max)||80,
+       notes?.trim() || null]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/plants/:id', async (req, res) => {
+  try {
+    const { rows: check } = await pool.query('SELECT is_preset FROM plant_profiles WHERE id = $1', [req.params.id]);
+    if (!check.length) return res.status(404).json({ error: 'Not found' });
+    if (check[0].is_preset) return res.status(403).json({ error: 'Preset plants cannot be edited' });
+    const { name, emoji, soil_min, soil_max, temp_min, temp_max, hum_min, hum_max, light_min, light_max, notes } = req.body;
+    const { rows } = await pool.query(
+      `UPDATE plant_profiles SET name=$1, emoji=$2, soil_min=$3, soil_max=$4, temp_min=$5, temp_max=$6,
+       hum_min=$7, hum_max=$8, light_min=$9, light_max=$10, notes=$11 WHERE id=$12 RETURNING *`,
+      [name.trim(), emoji || '🌱',
+       Number(soil_min), Number(soil_max),
+       Number(temp_min), Number(temp_max),
+       Number(hum_min),  Number(hum_max),
+       Number(light_min), Number(light_max),
+       notes?.trim() || null, req.params.id]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/plants/:id', async (req, res) => {
+  try {
+    const { rows: check } = await pool.query('SELECT is_preset FROM plant_profiles WHERE id = $1', [req.params.id]);
+    if (!check.length) return res.status(404).json({ error: 'Not found' });
+    if (check[0].is_preset) return res.status(403).json({ error: 'Preset plants cannot be deleted' });
+    await pool.query('DELETE FROM plant_profiles WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─── Serve React app (catch-all) ───────────────────────────────────
 app.get('*', (req, res) => {
