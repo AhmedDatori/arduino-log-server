@@ -123,9 +123,11 @@ function computeTrend(values) {
 const predCache     = { data: null, at: 0 };
 const rcCache       = { data: null, at: 0 };
 const modelCache    = { data: null, at: 0 };
+const hwCache       = { data: null, at: 0 };
 const PRED_TTL      = 10 * 60 * 1000;  // 10 min
 const RC_TTL        = 15 * 60 * 1000;  // 15 min
 const MODEL_TTL     = 60 * 60 * 1000;  // 1 hour
+const HW_TTL        = 20 * 60 * 1000;  // 20 min
 
 // ─── Autopilot: pump timer ─────────────────────────────────────────
 let pumpTimer = null;
@@ -1433,6 +1435,178 @@ app.delete('/api/token-usage', async (_req, res) => {
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// FEATURE 12: AI Hardware Failure Prediction
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/hardware', async (req, res) => {
+  try {
+    const force = req.query.force === '1';
+    if (!force && Date.now() - hwCache.at < HW_TTL && hwCache.data) return res.json(hwCache.data);
+
+    // ── Fetch data ──────────────────────────────────────────────────
+    const [{ rows: logs }, { rows: pumpEvents }] = await Promise.all([
+      pool.query(`
+        SELECT soil, water, light, temp, hum, time
+        FROM logs WHERE time > NOW() - INTERVAL '6 hours'
+        ORDER BY time ASC
+      `),
+      pool.query(`
+        SELECT created_at, actions FROM autopilot_log
+        WHERE actions->>'pump' = 'true'
+          AND created_at > NOW() - INTERVAL '24 hours'
+        ORDER BY created_at ASC
+      `),
+    ]);
+
+    if (logs.length < 5) {
+      return res.json({
+        risks: [],
+        healthy_components: [],
+        overall_status: 'unknown',
+        summary: 'Not enough data for hardware diagnostics — need at least 5 sensor readings.',
+        generated_at: new Date().toISOString(),
+      });
+    }
+
+    // ── Statistical analysis per sensor ────────────────────────────
+    const stats = (key) => {
+      const vals = logs.filter(r => r[key] != null).map(r => Number(r[key]));
+      if (!vals.length) return { count: 0, mean: null, stddev: null, min: null, max: null };
+      const mean   = vals.reduce((a, b) => a + b, 0) / vals.length;
+      const stddev = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length);
+      return { count: vals.length, mean: +mean.toFixed(2), stddev: +stddev.toFixed(3), min: Math.min(...vals), max: Math.max(...vals) };
+    };
+
+    const soilSt  = stats('soil');
+    const waterSt = stats('water');
+    const lightSt = stats('light');
+    const tempSt  = stats('temp');
+    const humSt   = stats('hum');
+
+    // A sensor is "stuck" if stddev < 0.3 over ≥8 readings (reads the same value constantly)
+    const stuck = (s, minCount = 8) => s.count >= minCount && s.stddev !== null && s.stddev < 0.3;
+
+    // ── Pump effectiveness analysis ─────────────────────────────────
+    // For each pump-ON event, compare soil moisture before vs after
+    const pumpChecks = [];
+    for (const pe of pumpEvents) {
+      const activatedAt = new Date(pe.created_at).getTime();
+      const before = logs.filter(r => {
+        const t = new Date(r.time).getTime();
+        return t >= activatedAt - 3 * 60_000 && t < activatedAt && r.soil != null;
+      });
+      const after  = logs.filter(r => {
+        const t = new Date(r.time).getTime();
+        return t > activatedAt && t <= activatedAt + 25 * 60_000 && r.soil != null;
+      });
+
+      if (before.length && after.length) {
+        const soilBefore   = before[before.length - 1].soil;
+        const soilAfterMax = Math.max(...after.map(r => r.soil));
+        pumpChecks.push({
+          at: pe.created_at,
+          soilBefore,
+          soilAfterMax,
+          delta: +(soilAfterMax - soilBefore).toFixed(1),
+          effective: soilAfterMax - soilBefore >= 2,
+        });
+      }
+    }
+
+    const failedPumps   = pumpChecks.filter(c => !c.effective);
+    const workedPumps   = pumpChecks.filter(c => c.effective);
+    const pumpFailureRate = pumpChecks.length ? failedPumps.length / pumpChecks.length : null;
+
+    // ── Water tank empty for extended time ─────────────────────────
+    const waterReadings  = logs.filter(r => r.water != null);
+    const emptyReadings  = waterReadings.filter(r => r.water < 200);
+    const emptyFraction  = waterReadings.length ? emptyReadings.length / waterReadings.length : 0;
+
+    // ── Build concise context for Gemini ──────────────────────────
+    const pumpSummary = pumpChecks.length === 0
+      ? 'No autopilot pump activations recorded in the last 24h.'
+      : `Pump activated ${pumpChecks.length}× in last 24h: ` +
+        `${workedPumps.length} worked (soil ↑≥2%), ${failedPumps.length} had no effect.\n` +
+        (failedPumps.length
+          ? `  No-effect events: ${failedPumps.slice(0, 3).map(c => `soil ${c.soilBefore}%→${c.soilAfterMax}%`).join(', ')}`
+          : '');
+
+    const lastLog      = logs[logs.length - 1];
+    const currentState = await getActuatorState();
+
+    const prompt = `You are a hardware diagnostics AI for an Arduino IoT greenhouse system. Analyze sensor statistics and actuator behavior to detect hardware failures or abnormalities.
+
+SENSOR STATISTICS (last 6 hours, ${logs.length} readings):
+Soil  — mean: ${soilSt.mean ?? 'N/A'}%, stddev: ${soilSt.stddev ?? 'N/A'}, range: [${soilSt.min}–${soilSt.max}]%, readings: ${soilSt.count}
+Water — mean: ${waterSt.mean ?? 'N/A'} raw, stddev: ${waterSt.stddev ?? 'N/A'}, range: [${waterSt.min}–${waterSt.max}], readings: ${waterSt.count}
+Light — mean: ${lightSt.mean ?? 'N/A'}%, stddev: ${lightSt.stddev ?? 'N/A'}, range: [${lightSt.min}–${lightSt.max}]%, readings: ${lightSt.count}
+Temp  — mean: ${tempSt.mean ?? 'N/A'}°C, stddev: ${tempSt.stddev ?? 'N/A'}, range: [${tempSt.min}–${tempSt.max}]°C, readings: ${tempSt.count}
+Hum   — mean: ${humSt.mean ?? 'N/A'}%, stddev: ${humSt.stddev ?? 'N/A'}, range: [${humSt.min}–${humSt.max}]%, readings: ${humSt.count}
+
+STUCK SENSOR FLAGS (stddev < 0.3 over 8+ readings = likely disconnected or broken):
+Soil sensor stuck:  ${stuck(soilSt)}
+Water sensor stuck: ${stuck(waterSt)}
+Light sensor stuck: ${stuck(lightSt)}
+Temp sensor stuck:  ${stuck(tempSt)}
+Hum sensor stuck:   ${stuck(humSt)}
+
+PUMP BEHAVIOR (last 24h):
+${pumpSummary}
+Pump failure rate: ${pumpChecks.length ? (pumpFailureRate * 100).toFixed(0) + '%' : 'N/A (no recorded activations)'}
+
+WATER TANK:
+${emptyFraction > 0 ? `Water level below 200 raw in ${(emptyFraction * 100).toFixed(0)}% of readings in last 6h (${emptyReadings.length}/${waterReadings.length} readings < 200)` : 'Water level appears adequate.'}
+
+CURRENT STATE:
+Latest — soil: ${lastLog.soil ?? 'N/A'}%, water: ${lastLog.water ?? 'N/A'}, light: ${lastLog.light ?? 'N/A'}%, temp: ${lastLog.temp ?? 'N/A'}°C
+Actuators — pump: ${currentState.pump ? 'ON' : 'OFF'}, grow light: ${currentState.light ? 'ON' : 'OFF'}
+
+RULES FOR GOOD ANALYSIS:
+1. Only flag a REAL risk if the numbers clearly support it (e.g. pumpFailureRate ≥ 50%, stuck sensor flag = true, water empty >80% of readings)
+2. Low stddev on temp/humidity can be NORMAL in a stable indoor environment — do NOT flag as stuck unless it's truly 0.000
+3. If the pump was never activated (autopilot in manual mode), note that pump health can't be assessed
+4. Use specific numbers in the reason and evidence fields
+
+Return ONLY valid JSON (no markdown):
+{
+  "overall_status": "healthy|warning|critical",
+  "risks": [
+    {
+      "component": "Pump|Soil Sensor|Water Sensor|Light Sensor|Temp Sensor|Humidity Sensor|Relay|Water Tank|Tubing",
+      "risk_level": "low|medium|high|critical",
+      "title": "Short descriptive issue title",
+      "reason": "1-2 sentences with specific numbers explaining why this is flagged",
+      "evidence": "The exact stat that triggered this (e.g. 'pump activated 3×, soil rose <2% each time')",
+      "possible_causes": ["Specific cause 1", "Specific cause 2", "Specific cause 3"],
+      "diagnostic_steps": ["Check step 1", "Check step 2"]
+    }
+  ],
+  "healthy_components": ["List only components confirmed working normally"],
+  "summary": "1-2 sentence overall hardware assessment"
+}`;
+
+    const result = await callGeminiJSON(prompt, { maxOutputTokens: 1000, temperature: 0.15, endpoint: 'hardware' });
+
+    const data = {
+      ...result,
+      _raw: {
+        pump_checks:   pumpChecks.length,
+        pump_failures: failedPumps.length,
+        logs_analyzed: logs.length,
+      },
+      generated_at: new Date().toISOString(),
+    };
+    hwCache.data = data;
+    hwCache.at   = Date.now();
+    res.json(data);
+  } catch (err) {
+    console.error('[HARDWARE]', err.message);
+    res.status(500).json({ error: err.message, risks: [] });
+  }
+});
+
+app.post('/api/hardware/refresh', (_req, res) => { hwCache.at = 0; res.json({ ok: true }); });
 
 // ─── Serve React app (catch-all) ───────────────────────────────────
 app.get('*', (req, res) => {

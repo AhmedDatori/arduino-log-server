@@ -97,3 +97,7 @@ export const refreshPlantModel = ()  => request('/api/plant-model/refresh', { me
 // ─── Token Usage ──────────────────────────────────────────────────
 export const fetchTokenUsage  = () => request('/api/token-usage');
 export const clearTokenUsage  = () => request('/api/token-usage', { method: 'DELETE' });
+
+// ─── Hardware Failure Prediction ──────────────────────────────────
+export const fetchHardware    = ()  => request('/api/hardware');
+export const refreshHardware  = ()  => request('/api/hardware/refresh', { method: 'POST' });

@@ -4,6 +4,7 @@ import {
   fetchExperiments, createExperiment, endExperiment, deleteExperiment,
   fetchPlantModel, refreshPlantModel,
 } from '../api';
+import HardwarePanel from './HardwarePanel';
 import './LabView.css';
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -529,9 +530,10 @@ export default function LabView() {
         <h2 className="section-title">🧪 AI Lab</h2>
       </div>
       <p className="lab-intro">
-        Advanced AI analysis tools — root cause diagnosis, A/B strategy experiments, and a personalized behavioral model built from your greenhouse's own data.
+        Advanced AI analysis tools — hardware diagnostics, root cause diagnosis, A/B strategy experiments, and a personalized behavioral model built from your greenhouse's own data.
       </p>
 
+      <HardwarePanel />
       <RootCausePanel />
       <ExperimentsPanel />
       <PlantModelPanel />
