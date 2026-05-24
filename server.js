@@ -7,7 +7,7 @@ const logs = [];
 let   nextId = 1;
 
 // ── Actuator state (set by dashboard, read by Arduino via POST /log response) ──
-const state = { light: false, pump: false };
+const state = { light: false, pump: false, buzzer: false };
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -25,7 +25,7 @@ app.post('/log', (req, res) => {
   if (logs.length > 200) logs.pop();
   console.log('[LOG]', entry.device, '->', entry.message);
   // Piggyback current actuator state onto the response — Arduino reads this!
-  res.json({ success: true, id: entry.id, light: state.light ? 1 : 0, pump: state.pump ? 1 : 0 });
+  res.json({ success: true, id: entry.id, light: state.light ? 1 : 0, pump: state.pump ? 1 : 0, buzzer: state.buzzer ? 1 : 0 });
 });
 
 // ── GET /api/logs  ← dashboard polls ───────────────────────────────
@@ -41,8 +41,9 @@ app.delete('/api/logs', (req, res) => {
 app.post('/api/control', (req, res) => {
   const { device, value } = req.body;
   const on = value === '1' || value === 1 || value === true || value === 'true';
-  if (device === 'light') state.light = on;
-  if (device === 'pump')  state.pump  = on;
+  if (device === 'light')  state.light  = on;
+  if (device === 'pump')   state.pump   = on;
+  if (device === 'buzzer') state.buzzer = on;
   console.log('[CTRL]', device.toUpperCase(), '->', on ? 'ON' : 'OFF');
   res.json({ success: true, state });
 });
@@ -364,6 +365,17 @@ tr:hover td{background:rgba(255,255,255,.02)}
         <div class="ctrl-hint">Pin D10 &mdash; applied on next Arduino POST</div>
       </div>
 
+      <div class="ctrl-card" id="ctrl-buzzer" style="--c:#4a6080">
+        <div class="ctrl-icon">&#128276;</div>
+        <div class="ctrl-name">Buzzer</div>
+        <div class="ctrl-state-val" id="cst-buzzer">—</div>
+        <div class="ctrl-btns">
+          <button class="cbon"  onclick="control('buzzer',1)">&#9679; ON</button>
+          <button class="cboff" onclick="control('buzzer',0)">&#9675; OFF</button>
+        </div>
+        <div class="ctrl-hint">Pin D6 &mdash; applied on next Arduino POST</div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -581,8 +593,9 @@ async function control(device, val) {
     f.append('value', String(val));
     var resp = await fetch('/api/control', { method:'POST', body:f }).then(function(r){ return r.json(); });
     if (resp && resp.state) {
-      setCtrlState('light', resp.state.light);
-      setCtrlState('pump',  resp.state.pump);
+      setCtrlState('light',  resp.state.light);
+      setCtrlState('pump',   resp.state.pump);
+      setCtrlState('buzzer', resp.state.buzzer);
     }
   } catch(e) { /* silent */ }
 }
@@ -612,8 +625,9 @@ async function load() {
     lastCount = logs.length;
 
     document.getElementById('hist-body').innerHTML = renderHistory(logs);
-    setCtrlState('light', stResp.light);
-    setCtrlState('pump',  stResp.pump);
+    setCtrlState('light',  stResp.light);
+    setCtrlState('pump',   stResp.pump);
+    setCtrlState('buzzer', stResp.buzzer);
   } catch(e) { /* silent */ }
 }
 
