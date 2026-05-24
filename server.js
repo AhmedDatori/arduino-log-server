@@ -1143,7 +1143,7 @@ app.get('/api/root-cause', async (req, res) => {
     if (!force && Date.now() - rcCache.at < RC_TTL && rcCache.data) return res.json(rcCache.data);
 
     const [{ rows: healthRows }, { rows: logRows }] = await Promise.all([
-      pool.query('SELECT score, status, computed_at FROM health_scores ORDER BY computed_at DESC LIMIT 20'),
+      pool.query('SELECT score, status, created_at FROM health_scores ORDER BY created_at DESC LIMIT 20'),
       pool.query(`SELECT soil, water, light, temp, hum, time FROM logs WHERE time > NOW() - INTERVAL '12 hours' ORDER BY time DESC LIMIT 48`),
     ]);
 
@@ -1155,7 +1155,7 @@ app.get('/api/root-cause', async (req, res) => {
     const previousScore = healthRows[1]?.score ?? 'N/A';
     const scoreDelta    = (typeof currentScore === 'number' && typeof previousScore === 'number') ? currentScore - previousScore : 0;
 
-    const scoreHistory  = healthRows.slice(0, 10).map(r => `${r.score} (${r.status}) at ${new Date(r.computed_at).toLocaleTimeString()}`).join('\n  ');
+    const scoreHistory  = healthRows.slice(0, 10).map(r => `${r.score} (${r.status}) at ${new Date(r.created_at).toLocaleTimeString()}`).join('\n  ');
     const logSummary    = logRows.slice(0, 24).map(r =>
       `soil:${r.soil ?? '—'}% water:${r.water ?? '—'} light:${r.light ?? '—'}% temp:${r.temp ?? '—'}°C hum:${r.hum ?? '—'}%`
     ).join('\n  ');
