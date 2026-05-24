@@ -63,6 +63,7 @@ async function callGemini(userText, {
   temperature     = 0.2,
   systemPrompt    = null,
   history         = [],
+  endpoint        = 'unknown',   // label for token usage tracking
 } = {}) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
@@ -82,6 +83,16 @@ async function callGemini(userText, {
     const msg = data?.error?.message || `HTTP ${res.status}`;
     throw Object.assign(new Error(`Gemini: ${msg}`), { geminiError: true, httpStatus: res.status });
   }
+
+  // ── Log token usage (fire-and-forget, never blocks the response) ──
+  const u = data?.usageMetadata;
+  if (u) {
+    pool.query(
+      'INSERT INTO token_usage (endpoint, prompt_tokens, output_tokens, total_tokens) VALUES ($1,$2,$3,$4)',
+      [endpoint, u.promptTokenCount ?? 0, u.candidatesTokenCount ?? 0, u.totalTokenCount ?? 0]
+    ).catch(e => console.error('[TOKEN_LOG]', e.message));
+  }
+
   return data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
@@ -245,7 +256,7 @@ Respond ONLY with valid JSON, no markdown:
   }
 }`;
 
-  const decision = await callGeminiJSON(prompt, { maxOutputTokens: 512, temperature: 0.1 });
+  const decision = await callGeminiJSON(prompt, { maxOutputTokens: 512, temperature: 0.1, endpoint: 'autopilot-ai' });
   // Safety override: block pump if water empty
   if (log.water !== null && log.water < 200 && decision.actions?.pump === true) {
     decision.actions.pump = false;
@@ -428,6 +439,17 @@ async function initDB() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id             SERIAL      PRIMARY KEY,
+      endpoint       TEXT        NOT NULL DEFAULT 'unknown',
+      prompt_tokens  INT         NOT NULL DEFAULT 0,
+      output_tokens  INT         NOT NULL DEFAULT 0,
+      total_tokens   INT         NOT NULL DEFAULT 0,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS experiments (
       id               SERIAL      PRIMARY KEY,
       name             TEXT        NOT NULL,
@@ -504,7 +526,7 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   }
 }`;
 
-  const result = await callGeminiJSON(prompt, { maxOutputTokens: 512, temperature: 0.2 });
+  const result = await callGeminiJSON(prompt, { maxOutputTokens: 512, temperature: 0.2, endpoint: 'health-score' });
   await pool.query(
     'INSERT INTO health_scores (score, status, advice, breakdown) VALUES ($1, $2, $3, $4)',
     [result.score, result.status, result.advice, JSON.stringify(result.breakdown)]
@@ -598,7 +620,7 @@ Respond ONLY with valid JSON, no markdown:
   "action": "<specific, practical recommended action for the owner>"
 }`;
 
-  const r = await callGeminiJSON(prompt, { maxOutputTokens: 700, temperature: 0.4 });
+  const r = await callGeminiJSON(prompt, { maxOutputTokens: 700, temperature: 0.4, endpoint: 'daily-report' });
   await pool.query(
     `INSERT INTO reports (title, status, summary, soil, water, light, temp, hum, main_problem, action, period_start, period_end)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
@@ -757,6 +779,7 @@ app.post('/api/chat', async (req, res) => {
       history,
       maxOutputTokens: 512,
       temperature:     0.7,
+      endpoint:        'chat',
     })) || 'No response from AI.';
 
     await pool.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['assistant', reply]);
@@ -1098,7 +1121,7 @@ Return ONLY valid JSON (no markdown):
   "next_check": "when to check again"
 }`;
 
-    const result = await callGeminiJSON(prompt, { maxOutputTokens: 800, temperature: 0.2 });
+    const result = await callGeminiJSON(prompt, { maxOutputTokens: 800, temperature: 0.2, endpoint: 'predictions' });
     predCache.data = { ...result, generated_at: new Date().toISOString(), readings: rows.length, span_hours: spanH };
     predCache.at   = Date.now();
     res.json(predCache.data);
@@ -1166,7 +1189,7 @@ Return ONLY valid JSON (no markdown):
   "recovery_steps": ["concrete step 1", "concrete step 2", "concrete step 3"]
 }`;
 
-    const result = await callGeminiJSON(prompt, { maxOutputTokens: 800, temperature: 0.2 });
+    const result = await callGeminiJSON(prompt, { maxOutputTokens: 800, temperature: 0.2, endpoint: 'root-cause' });
     rcCache.data = { ...result, generated_at: new Date().toISOString() };
     rcCache.at   = Date.now();
     res.json(rcCache.data);
@@ -1237,7 +1260,7 @@ Return ONLY valid JSON (no markdown):
   "recommendation": "Which strategy to use going forward and why"
 }`;
 
-    const result = await callGeminiJSON(prompt, { maxOutputTokens: 900, temperature: 0.3 });
+    const result = await callGeminiJSON(prompt, { maxOutputTokens: 900, temperature: 0.3, endpoint: 'experiments' });
     await pool.query(
       `UPDATE experiments SET status = 'completed', ended_at = NOW(), result = $1 WHERE id = $2`,
       [JSON.stringify(result), exp.id]
@@ -1339,7 +1362,7 @@ Return ONLY valid JSON (no markdown):
   "summary": "2-3 sentence summary of this greenhouse's specific behavior"
 }`;
 
-    const result = await callGeminiJSON(prompt, { maxOutputTokens: 800, temperature: 0.3 });
+    const result = await callGeminiJSON(prompt, { maxOutputTokens: 800, temperature: 0.3, endpoint: 'plant-model' });
     modelCache.data = { ...result, stats, generated_at: new Date().toISOString() };
     modelCache.at   = Date.now();
     res.json(modelCache.data);
@@ -1350,6 +1373,66 @@ Return ONLY valid JSON (no markdown):
 });
 
 app.post('/api/plant-model/refresh', (_req, res) => { modelCache.at = 0; res.json({ ok: true }); });
+
+// ═══════════════════════════════════════════════════════════════════
+// Token Usage Tracker
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/token-usage', async (_req, res) => {
+  try {
+    const [{ rows: recent }, { rows: byEndpoint }, { rows: overall }, { rows: daily }] = await Promise.all([
+      // Last 100 individual requests
+      pool.query(`
+        SELECT id, endpoint, prompt_tokens, output_tokens, total_tokens, created_at
+        FROM token_usage ORDER BY created_at DESC LIMIT 100
+      `),
+      // Aggregated per endpoint
+      pool.query(`
+        SELECT
+          endpoint,
+          COUNT(*)::INT             AS calls,
+          SUM(prompt_tokens)::INT   AS prompt_tokens,
+          SUM(output_tokens)::INT   AS output_tokens,
+          SUM(total_tokens)::INT    AS total_tokens,
+          AVG(total_tokens)::INT    AS avg_tokens,
+          MAX(total_tokens)::INT    AS max_tokens
+        FROM token_usage
+        GROUP BY endpoint
+        ORDER BY total_tokens DESC
+      `),
+      // Grand total
+      pool.query(`
+        SELECT
+          COUNT(*)::INT             AS total_calls,
+          COALESCE(SUM(prompt_tokens),0)::INT  AS grand_prompt,
+          COALESCE(SUM(output_tokens),0)::INT  AS grand_output,
+          COALESCE(SUM(total_tokens),0)::INT   AS grand_total
+        FROM token_usage
+      `),
+      // Daily totals (last 14 days)
+      pool.query(`
+        SELECT
+          DATE(created_at)          AS day,
+          COUNT(*)::INT             AS calls,
+          SUM(total_tokens)::INT    AS total_tokens
+        FROM token_usage
+        WHERE created_at > NOW() - INTERVAL '14 days'
+        GROUP BY DATE(created_at)
+        ORDER BY day ASC
+      `),
+    ]);
+    res.json({ recent, by_endpoint: byEndpoint, overall: overall[0], daily });
+  } catch (err) {
+    console.error('[TOKEN-USAGE]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/token-usage', async (_req, res) => {
+  try {
+    await pool.query('DELETE FROM token_usage');
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // ─── Serve React app (catch-all) ───────────────────────────────────
 app.get('*', (req, res) => {

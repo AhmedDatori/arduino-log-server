@@ -8,6 +8,7 @@ import PlantsView       from './components/PlantsView';
 import ChatView         from './components/ChatView';
 import AlertsView       from './components/AlertsView';
 import LabView          from './components/LabView';
+import UsageView        from './components/UsageView';
 import { fetchLogs, fetchState, fetchNotifications, fetchPlants, fetchMode } from './api';
 
 const REFRESH_MS = 5_000;
@@ -92,6 +93,9 @@ export default function App() {
         )}
         {tab === 'lab' && (
           <LabView />
+        )}
+        {tab === 'usage' && (
+          <UsageView />
         )}
       </main>
     </div>

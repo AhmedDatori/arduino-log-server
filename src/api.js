@@ -93,3 +93,7 @@ export const deleteExperiment  = (id)   => request(`/api/experiments/${id}`, { m
 // ─── Plant Care Model ─────────────────────────────────────────────
 export const fetchPlantModel   = ()  => request('/api/plant-model');
 export const refreshPlantModel = ()  => request('/api/plant-model/refresh', { method: 'POST' });
+
+// ─── Token Usage ──────────────────────────────────────────────────
+export const fetchTokenUsage  = () => request('/api/token-usage');
+export const clearTokenUsage  = () => request('/api/token-usage', { method: 'DELETE' });
