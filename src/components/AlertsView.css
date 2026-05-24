@@ -1,0 +1,76 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   ALERTS VIEW — alert items · severity styles · dismiss button
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Empty state */
+.alerts-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .75rem;
+  padding: 4rem 2rem;
+  color: #4a6080;
+  text-align: center;
+  font-size: 13px;
+}
+
+/* ── Alert item ───────────────────────────────────────────────────────────── */
+.alert-item {
+  display: flex;
+  align-items: flex-start;
+  gap: .75rem;
+  background: rgba(10,20,35,.7);
+  border: 1px solid #1a2d42;
+  border-radius: 12px;
+  padding: .85rem 1rem;
+  margin-bottom: .55rem;
+  transition: opacity .25s, border-color .25s;
+}
+
+/* Severity border tints */
+.alert-item.danger  { border-color: rgba(255,77,109,.3);  }
+.alert-item.warning { border-color: rgba(245,165,36,.3);  }
+.alert-item.info    { border-color: rgba(56,178,248,.25); }
+
+/* Acknowledged / dismissed state */
+.alert-item.acked { opacity: .45; }
+
+.alert-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.alert-body { flex: 1; min-width: 0; }
+
+.alert-msg {
+  font-size: 13px;
+  color: #cdd9e8;
+  line-height: 1.5;
+  margin: 0 0 3px;
+  word-break: break-word;
+}
+
+.alert-meta {
+  font-size: 10px;
+  color: #2a3f58;
+  font-family: 'JetBrains Mono', monospace;
+  margin: 0;
+}
+
+/* ── Dismiss button ───────────────────────────────────────────────────────── */
+.btn-ack {
+  flex-shrink: 0;
+  background: rgba(255,255,255,.04);
+  border: 1px solid #1a2d42;
+  border-radius: 8px;
+  color: #4a6080;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  transition: all .2s;
+  white-space: nowrap;
+  align-self: flex-start;
+}
+.btn-ack:hover { background: rgba(255,255,255,.08); color: #7a94b0; border-color: #2a3f58; }

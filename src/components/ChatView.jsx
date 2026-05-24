@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { fetchConversations, deleteConversations, sendChatMessage } from '../api';
+import './ChatView.css';
 
 const HINTS = [
   'How is my plant doing?',
@@ -102,7 +103,7 @@ export default function ChatView() {
     <div className="view-wrap chat-view">
 
       <div className="view-header">
-        <h2 className="section-title" style={{ margin: 0 }}>🌿 AI Plant Assistant</h2>
+        <h2 className="section-title">🌿 AI Plant Assistant</h2>
         <button className="btn-danger" onClick={handleClear}>🗑 Clear Chat</button>
       </div>
 

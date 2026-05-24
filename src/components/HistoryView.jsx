@@ -1,6 +1,7 @@
 import React from 'react';
 import { ago, waterInfo, soilInfo, lightInfo, tempInfo, humInfo } from '../utils';
 import { deleteLogs } from '../api';
+import './HistoryView.css';
 
 // Color class from hex color
 function colorClass(color) {
@@ -34,7 +35,7 @@ export default function HistoryView({ logs, onLogsCleared }) {
     <div className="view-wrap">
 
       <div className="view-header">
-        <h2 className="section-title" style={{ margin: 0 }}>📈 Log History</h2>
+        <h2 className="section-title">📈 Log History</h2>
         <button className="btn-danger" onClick={handleClear}>🗑 Clear All</button>
       </div>
 

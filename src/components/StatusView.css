@@ -1,0 +1,67 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   STATUS VIEW — plant status bar · autopilot controls note
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── Plant Status Bar ─────────────────────────────────────────────────────── */
+.plant-status-bar {
+  background: rgba(10,20,35,.7);
+  border: 1px solid #1a2d42;
+  border-radius: 18px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.psb-header {
+  display: flex;
+  align-items: center;
+  gap: .85rem;
+  margin-bottom: 1.1rem;
+}
+.psb-emoji { font-size: 2rem; line-height: 1; }
+.psb-name  { font-size: 15px; font-weight: 700; color: #cdd9e8; }
+.psb-sub   { font-size: 11px; color: #2a3f58; margin-top: 2px; }
+
+.psb-sensors {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: .75rem;
+}
+
+.psb-sensor {
+  border: 1px solid;
+  border-radius: 12px;
+  padding: .75rem .85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color .3s;
+}
+.psb-sensor-top   { display: flex; align-items: center; gap: .35rem; }
+.psb-sensor-icon  { font-size: .9rem; flex-shrink: 0; }
+.psb-sensor-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: #4a6080;
+  flex: 1;
+}
+.psb-sensor-badge { font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.psb-sensor-val   { font-family: 'JetBrains Mono', monospace; font-size: 1.3rem; font-weight: 700; line-height: 1; }
+.psb-sensor-ideal { font-size: 10px; color: #2a3f58; }
+
+/* ── Autopilot active note above controls ─────────────────────────────────── */
+.ctrl-autopilot-note {
+  background: rgba(61,255,160,.05);
+  border: 1px solid rgba(61,255,160,.15);
+  border-radius: 10px;
+  color: #3dffa0;
+  font-size: 12px;
+  padding: .55rem 1rem;
+  margin-bottom: .85rem;
+  opacity: .85;
+}
+
+@media (max-width: 640px) {
+  .psb-sensors { grid-template-columns: repeat(2, 1fr); }
+}

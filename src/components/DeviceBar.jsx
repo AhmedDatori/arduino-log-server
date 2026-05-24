@@ -1,5 +1,6 @@
 import React from 'react';
 import { ago } from '../utils';
+import './DeviceBar.css';
 
 export default function DeviceBar({ latest, total, plant }) {
   const isOnline = latest

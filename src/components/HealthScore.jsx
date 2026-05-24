@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { fetchHealth, refreshHealth } from '../api';
 import { ago } from '../utils';
+import './HealthScore.css';
 
 const SENSORS = [
   { key: 'soil',  icon: '🌿', label: 'Soil Moisture' },
@@ -73,8 +74,11 @@ export default function HealthScore() {
     try {
       const h = await fetchHealth();
       setData(h);
-    } catch (_) {}
-    finally { setLoading(false); }
+    } catch {
+      // ignore — no score yet, empty state is shown
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -84,8 +88,11 @@ export default function HealthScore() {
     try {
       const h = await refreshHealth();
       setData(h);
-    } catch (_) {}
-    finally { setRefreshing(false); }
+    } catch {
+      // ignore — score stays as-is, user can retry
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const score     = data?.score   ?? null;
@@ -97,7 +104,7 @@ export default function HealthScore() {
       {/* Header row */}
       <div className="health-header">
         <div className="health-title">
-          <span style={{ fontSize: '1.1rem' }}>🌱</span>
+          <span className="health-icon">🌱</span>
           <span>Plant Health Score</span>
         </div>
         <div className="health-meta">
@@ -167,7 +174,7 @@ export default function HealthScore() {
                       </div>
                     </div>
                     <span className="breakdown-pts" style={{ color: c }}>
-                      {pts ?? '—'}<span style={{ color: '#2a3f58' }}>/20</span>
+                      {pts ?? '—'}<span className="score-denom">/20</span>
                     </span>
                   </div>
                 );

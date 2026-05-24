@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { postControl } from '../api';
+import './ControlCard.css';
 
 export default function ControlCard({ id, icon, label, hint, isOn, onStateChange }) {
   const [loading, setLoading] = useState(false);

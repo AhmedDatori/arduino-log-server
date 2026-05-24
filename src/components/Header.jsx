@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
+import './Header.css';
 
 const TABS = [
   { id: 'status',  label: 'Status'   },

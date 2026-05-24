@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { fetchReports, generateReport } from '../api';
+import './ReportsView.css';
 
 const STATUS_CONFIG = {
   good: { color: '#3dffa0', bg: 'rgba(61,255,160,.08)',  border: 'rgba(61,255,160,.25)', label: '✅ Good Day'    },
@@ -92,8 +93,11 @@ export default function ReportsView() {
     try {
       const data = await fetchReports();
       setReports(data);
-    } catch (_) {}
-    finally { setLoading(false); }
+    } catch {
+      // ignore — empty state is shown
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -115,7 +119,7 @@ export default function ReportsView() {
     <div className="view-wrap">
 
       <div className="view-header">
-        <h2 className="section-title" style={{ margin: 0 }}>📋 Daily Reports</h2>
+        <h2 className="section-title">📋 Daily Reports</h2>
         <button
           className="btn-generate"
           onClick={handleGenerate}
@@ -142,8 +146,8 @@ export default function ReportsView() {
         <div className="reports-empty">
           <span style={{ fontSize: '2.5rem' }}>📋</span>
           <p>No reports yet</p>
-          <p style={{ fontSize: '12px', color: '#2a3f58', marginTop: '.25rem' }}>
-            Click <strong style={{ color: '#3dffa0' }}>Generate Report</strong> to create your first one
+          <p className="text-xs text-dim mt-xs">
+            Click <strong className="text-accent">Generate Report</strong> to create your first one
           </p>
         </div>
       ) : (

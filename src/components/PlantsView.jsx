@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { fetchPlants, selectPlant, createPlant, updatePlant, deletePlant } from '../api';
+import './PlantsView.css';
 
 const RANGES = [
   { key: 'soil',  icon: '🌿', label: 'Soil',  unit: '%',  minK: 'soil_min',  maxK: 'soil_max',  step: 1,   lo: 0,  hi: 100 },
@@ -89,7 +90,7 @@ function PlantForm({ initial, onSave, onCancel }) {
 
       {/* Name + Emoji */}
       <div className="pf-row">
-        <div className="pf-field" style={{ flex: 1 }}>
+        <div className="pf-field pf-field-flex">
           <label>Plant Name</label>
           <input
             type="text"
@@ -100,15 +101,14 @@ function PlantForm({ initial, onSave, onCancel }) {
             maxLength={40}
           />
         </div>
-        <div className="pf-field" style={{ width: '80px' }}>
+        <div className="pf-field pf-field-emoji">
           <label>Emoji</label>
           <input
             type="text"
-            className="pf-input"
+            className="pf-input pf-input-emoji"
             value={form.emoji}
             onChange={e => set('emoji', e.target.value)}
             maxLength={4}
-            style={{ textAlign: 'center', fontSize: '1.3rem' }}
           />
         </div>
       </div>
@@ -140,7 +140,7 @@ function PlantForm({ initial, onSave, onCancel }) {
 
       {/* Notes */}
       <div className="pf-field">
-        <label>Notes <span style={{ color: '#2a3f58' }}>(optional)</span></label>
+        <label>Notes <span className="text-dim">(optional)</span></label>
         <input
           type="text"
           className="pf-input"
@@ -171,8 +171,11 @@ export default function PlantsView() {
     try {
       const data = await fetchPlants();
       setPlants(data);
-    } catch (_) {}
-    finally { setLoading(false); }
+    } catch {
+      // ignore — empty state is shown
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -217,7 +220,7 @@ export default function PlantsView() {
     <div className="view-wrap">
 
       <div className="view-header">
-        <h2 className="section-title" style={{ margin: 0 }}>🌿 Plant Profiles</h2>
+        <h2 className="section-title">🌿 Plant Profiles</h2>
         {editing ? (
           <button className="btn-danger" onClick={() => setEditing(null)}>✕ Cancel</button>
         ) : (
@@ -231,7 +234,7 @@ export default function PlantsView() {
 
       <p className="reports-info">
         Select your plant type so the AI can give accurate, species-specific advice.
-        {active && <> Currently monitoring: <strong style={{ color: '#3dffa0' }}>{active.emoji} {active.name}</strong>.</>}
+        {active && <> Currently monitoring: <strong className="text-accent">{active.emoji} {active.name}</strong>.</>}
       </p>
 
       {/* Add / Edit form */}
@@ -264,7 +267,7 @@ export default function PlantsView() {
           {/* Custom plants */}
           <h3 className="plants-section-label" style={{ marginTop: '2rem' }}>
             ✏️ My Custom Plants
-            {custom.length === 0 && <span style={{ color: '#2a3f58', fontWeight: 400, fontSize: '11px', marginLeft: '.5rem' }}>— none yet</span>}
+            {custom.length === 0 && <span className="plants-section-note">— none yet</span>}
           </h3>
           {custom.length > 0 && (
             <div className="plants-grid">

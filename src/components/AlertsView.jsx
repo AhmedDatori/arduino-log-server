@@ -1,5 +1,6 @@
 import React from 'react';
 import { ackNotification, deleteNotifications } from '../api';
+import './AlertsView.css';
 
 const SEVERITY_ICONS = { danger: '🔴', warning: '🟡', info: '🔵' };
 
@@ -46,7 +47,7 @@ export default function AlertsView({ alerts, onAlertsChanged }) {
     <div className="view-wrap">
 
       <div className="view-header">
-        <h2 className="section-title" style={{ margin: 0 }}>🔔 Alerts</h2>
+        <h2 className="section-title">🔔 Alerts</h2>
         <button className="btn-danger" onClick={handleClearAll}>🗑 Clear All</button>
       </div>
 

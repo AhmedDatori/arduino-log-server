@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { setMode as apiSetMode } from '../api';
+import './ModeSelector.css';
 
 const MODES = [
   {

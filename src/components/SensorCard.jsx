@@ -1,4 +1,5 @@
 import React from 'react';
+import './SensorCard.css';
 
 // ─── Gauge SVG ─────────────────────────────────────────────────────
 const CIRC   = 263.9;

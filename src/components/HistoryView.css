@@ -1,0 +1,34 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   HISTORY VIEW — scrollable log table with color-coded sensor values
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.table-wrap { overflow-x: auto; }
+
+table { width: 100%; border-collapse: collapse; }
+
+th {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #2a3f58;
+  padding: .6rem .8rem;
+  border-bottom: 1px solid #0f1e2e;
+  text-align: left;
+  white-space: nowrap;
+}
+td { padding: .55rem .8rem; border-bottom: 1px solid rgba(15,30,46,.6); font-size: 12px; }
+tr:hover td { background: rgba(255,255,255,.02); }
+
+.cell-num  { color: #2a3f58; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.cell-time { font-family: 'JetBrains Mono', monospace; font-size: 11px; white-space: nowrap; }
+.cell-ago  { display: block; font-size: 10px; color: #2a3f58; }
+.cell-dev  { color: #7a94b0; font-size: 11px; }
+.empty-cell { text-align: center; color: #2a3f58; padding: 3rem; }
+
+/* Color-value classes for sensor readings */
+.cv-g { color: #3dffa0; }  /* good / green  */
+.cv-a { color: #f5a524; }  /* warning / amber */
+.cv-r { color: #ff4d6d; }  /* danger / red   */
+.cv-b { color: #38b2f8; }  /* info / blue    */
+.cv-m { color: #4a6080; }  /* muted / missing */

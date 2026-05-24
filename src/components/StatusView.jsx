@@ -5,6 +5,7 @@ import HealthScore from './HealthScore';
 import ModeSelector from './ModeSelector';
 import AutopilotStatus from './AutopilotStatus';
 import { waterInfo, soilInfo, lightInfo, tempInfo, humInfo } from '../utils';
+import './StatusView.css';
 
 // ── Plant vs sensor comparison ────────────────────────────────────
 function sensorStatus(value, min, max) {

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { fetchAutopilotLog, triggerAutopilot } from '../api';
 import { ago } from '../utils';
+import './AutopilotStatus.css';
 
 const RISK_META = {
   low:      { color: '#3dffa0', bg: 'rgba(61,255,160,.06)',  border: 'rgba(61,255,160,.18)'  },

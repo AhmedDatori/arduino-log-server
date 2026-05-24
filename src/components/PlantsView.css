@@ -1,0 +1,192 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   PLANTS VIEW — plant cards grid · add/edit form
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── Section headings ─────────────────────────────────────────────────────── */
+.plants-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: #2a3f58;
+  margin-bottom: 1rem;
+  padding-bottom: .5rem;
+  border-bottom: 1px solid #0f1e2e;
+}
+.plants-section-note { color: #2a3f58; font-weight: 400; font-size: 11px; margin-left: .5rem; }
+
+/* Success flash message */
+.plant-flash {
+  background: rgba(61,255,160,.08);
+  border: 1px solid rgba(61,255,160,.25);
+  border-radius: 10px;
+  color: #3dffa0;
+  padding: .65rem 1rem;
+  font-size: 13px;
+  margin-bottom: 1rem;
+  animation: fadeIn .3s ease;
+}
+
+/* ── Plants grid ──────────────────────────────────────────────────────────── */
+.plants-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+/* ── Plant card ───────────────────────────────────────────────────────────── */
+.plant-card {
+  background: rgba(10,20,35,.75);
+  border: 1px solid #1a2d42;
+  border-radius: 16px;
+  padding: 1.25rem 1rem 1rem;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .5rem;
+  text-align: center;
+  transition: border-color .2s, box-shadow .2s, background .2s;
+  outline: none;
+  user-select: none;
+}
+.plant-card:hover:not(.is-active) { border-color: #3a5570; background: rgba(15,28,48,.85); }
+.plant-card:active                { transform: scale(.97); }
+.plant-card.is-active             { border-color: rgba(61,255,160,.45); background: rgba(61,255,160,.04); box-shadow: 0 0 24px rgba(61,255,160,.08); cursor: default; }
+
+/* Active ribbon badge */
+.plant-active-ribbon {
+  position: absolute;
+  top: 10px;
+  right: -24px;
+  background: #3dffa0;
+  color: #060b11;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  padding: 3px 28px;
+  transform: rotate(35deg);
+  pointer-events: none;
+}
+
+.plant-emoji { font-size: 2.4rem; line-height: 1; }
+.plant-name  { font-size: 13px; font-weight: 700; color: #cdd9e8; }
+
+/* Range table inside card */
+.plant-ranges {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: .25rem;
+  background: rgba(0,0,0,.15);
+  border-radius: 10px;
+  padding: .6rem .75rem;
+}
+.plant-range-row   { display: flex; align-items: center; gap: .4rem; font-size: 11px; }
+.plant-range-icon  { font-size: .9rem; flex-shrink: 0; }
+.plant-range-label { color: #4a6080; flex: 1; text-align: left; }
+.plant-range-val   { font-family: 'JetBrains Mono', monospace; color: #7a94b0; font-size: 10px; white-space: nowrap; }
+.plant-card.is-active .plant-range-val { color: #3dffa0; }
+
+.plant-notes { font-size: 10px; color: #2a3f58; line-height: 1.4; font-style: italic; margin: 0; }
+
+/* Edit / Delete buttons (custom plants only) */
+.plant-actions    { display: flex; gap: .5rem; margin-top: .25rem; }
+.plant-btn-edit {
+  background: rgba(56,178,248,.08);
+  border: 1px solid rgba(56,178,248,.2);
+  border-radius: 7px;
+  color: #38b2f8;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  transition: all .2s;
+}
+.plant-btn-edit:hover { background: rgba(56,178,248,.18); }
+
+.plant-btn-delete {
+  background: rgba(255,77,109,.06);
+  border: 1px solid rgba(255,77,109,.2);
+  border-radius: 7px;
+  color: #ff4d6d;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  transition: all .2s;
+}
+.plant-btn-delete:hover { background: rgba(255,77,109,.16); }
+
+/* ── Plant add/edit form ──────────────────────────────────────────────────── */
+.plant-form {
+  background: rgba(10,20,35,.85);
+  border: 1px solid rgba(61,255,160,.2);
+  border-radius: 16px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: .85rem;
+}
+.plant-form-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #3dffa0;
+}
+.plant-form-error {
+  background: rgba(255,77,109,.08);
+  border: 1px solid rgba(255,77,109,.25);
+  border-radius: 8px;
+  color: #ff4d6d;
+  padding: .5rem .75rem;
+  font-size: 12px;
+}
+
+/* Form layout helpers */
+.pf-row         { display: flex; gap: .75rem; align-items: flex-end; }
+.pf-field       { display: flex; flex-direction: column; gap: 4px; }
+.pf-field-flex  { flex: 1; }
+.pf-field-emoji { width: 80px; }
+
+.pf-field label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: #4a6080;
+}
+
+.pf-input {
+  background: rgba(6,11,17,.8);
+  border: 1px solid #1a2d42;
+  border-radius: 8px;
+  padding: .5rem .75rem;
+  color: #cdd9e8;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+  transition: border-color .2s;
+}
+.pf-input:focus    { border-color: #3dffa0; }
+.pf-input-emoji    { text-align: center; font-size: 1.3rem; }
+
+.pf-range-row    { display: flex; align-items: center; gap: .75rem; }
+.pf-range-icon   { font-size: 12px; font-weight: 600; color: #4a6080; min-width: 60px; text-transform: uppercase; letter-spacing: .06em; flex-shrink: 0; }
+.pf-range-inputs { display: flex; align-items: center; gap: .4rem; }
+.pf-num          { width: 72px; text-align: center; padding: .4rem .5rem; }
+.pf-dash         { color: #4a6080; }
+.pf-unit         { color: #4a6080; font-size: 12px; min-width: 20px; }
+.pf-footer       { display: flex; justify-content: flex-end; gap: .75rem; margin-top: .25rem; }
+
+@media (max-width: 640px) {
+  .plants-grid  { grid-template-columns: repeat(2, 1fr); }
+  .pf-range-row { flex-wrap: wrap; }
+}

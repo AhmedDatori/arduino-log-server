@@ -53,6 +53,49 @@ async function getMode() {
   return rows[0]?.mode ?? 'manual';
 }
 
+// ─── Gemini API helpers ────────────────────────────────────────────
+/**
+ * Low-level Gemini call. Supports system instructions and multi-turn history.
+ * On API error, throws with { geminiError: true } for targeted handling.
+ */
+async function callGemini(userText, {
+  maxOutputTokens = 512,
+  temperature     = 0.2,
+  systemPrompt    = null,
+  history         = [],
+} = {}) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+
+  const body = {
+    contents:         [...history, { role: 'user', parts: [{ text: userText }] }],
+    generationConfig: { maxOutputTokens, temperature },
+  };
+  if (systemPrompt) body.systemInstruction = { parts: [{ text: systemPrompt }] };
+
+  const res  = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+  );
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = data?.error?.message || `HTTP ${res.status}`;
+    throw Object.assign(new Error(`Gemini: ${msg}`), { geminiError: true, httpStatus: res.status });
+  }
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+/**
+ * Same as callGemini but parses and returns the first JSON object in the response.
+ * Use for all AI endpoints that expect structured JSON output.
+ */
+async function callGeminiJSON(userText, options = {}) {
+  const text  = await callGemini(userText, options);
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error(`Gemini returned no JSON. Got: ${text.slice(0, 120)}`);
+  return JSON.parse(match[0]);
+}
+
 // ─── Autopilot: pump timer ─────────────────────────────────────────
 let pumpTimer = null;
 
@@ -146,9 +189,6 @@ async function runRulesEngine(log, state, plant) {
 
 // ─── Autopilot: AI engine ──────────────────────────────────────────
 async function runAIEngine(log, state, plant) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
-
   const plantCtx = plant
     ? `Plant: ${plant.emoji} ${plant.name}\nIdeal: Soil ${plant.soil_min}–${plant.soil_max}%, Temp ${plant.temp_min}–${plant.temp_max}°C, Humidity ${plant.hum_min}–${plant.hum_max}%, Light ${plant.light_min}–${plant.light_max}%`
     : 'No plant profile selected — use general plant care guidelines.';
@@ -185,23 +225,7 @@ Respond ONLY with valid JSON, no markdown:
   }
 }`;
 
-  const res  = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
-    {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 512, temperature: 0.1 },
-      }),
-    }
-  );
-  const data  = await res.json();
-  const text  = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON from Gemini autopilot');
-
-  const decision = JSON.parse(match[0]);
+  const decision = await callGeminiJSON(prompt, { maxOutputTokens: 512, temperature: 0.1 });
   // Safety override: block pump if water empty
   if (log.water !== null && log.water < 200 && decision.actions?.pump === true) {
     decision.actions.pump = false;
@@ -406,8 +430,7 @@ async function initDB() {
 
 // ─── AI Health Score ───────────────────────────────────────────────
 async function computeHealthScore() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
+  if (!process.env.GEMINI_API_KEY) return null;
 
   const [logsResult, state, plant] = await Promise.all([
     pool.query('SELECT * FROM logs ORDER BY time DESC LIMIT 1'),
@@ -446,24 +469,7 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   }
 }`;
 
-  const geminiRes = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
-    {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 512, temperature: 0.2 },
-      }),
-    }
-  );
-
-  const data = await geminiRes.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON in Gemini response');
-
-  const result = JSON.parse(match[0]);
+  const result = await callGeminiJSON(prompt, { maxOutputTokens: 512, temperature: 0.2 });
   await pool.query(
     'INSERT INTO health_scores (score, status, advice, breakdown) VALUES ($1, $2, $3, $4)',
     [result.score, result.status, result.advice, JSON.stringify(result.breakdown)]
@@ -497,8 +503,7 @@ app.post('/api/health/refresh', async (req, res) => {
 
 // ─── Daily Report ─────────────────────────────────────────────────
 async function generateDailyReport() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
+  if (!process.env.GEMINI_API_KEY) return null;
 
   const now   = new Date();
   const start = new Date(now - 24 * 60 * 60 * 1000);
@@ -558,24 +563,7 @@ Respond ONLY with valid JSON, no markdown:
   "action": "<specific, practical recommended action for the owner>"
 }`;
 
-  const geminiRes = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
-    {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 700, temperature: 0.4 },
-      }),
-    }
-  );
-
-  const data  = await geminiRes.json();
-  const text  = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON in Gemini response');
-
-  const r = JSON.parse(match[0]);
+  const r = await callGeminiJSON(prompt, { maxOutputTokens: 700, temperature: 0.4 });
   await pool.query(
     `INSERT INTO reports (title, status, summary, soil, water, light, temp, hum, main_problem, action, period_start, period_end)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
@@ -699,8 +687,7 @@ app.post('/api/chat', async (req, res) => {
     const message = String(req.body.message || '').trim();
     if (!message) return res.status(400).json({ error: 'Empty message' });
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
+    if (!process.env.GEMINI_API_KEY) {
       return res.status(503).json({
         error: 'AI not configured — add GEMINI_API_KEY in Hostinger → Node.js → Environment Variables.',
       });
@@ -730,37 +717,19 @@ app.post('/api/chat', async (req, res) => {
     // Save user message before calling Gemini
     await pool.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['user', message]);
 
-    // Call Gemini REST API directly — no SDK dependency
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
-      {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents: [
-            ...history,
-            { role: 'user', parts: [{ text: message }] },
-          ],
-          generationConfig: { maxOutputTokens: 512 },
-        }),
-      }
-    );
-
-    const data  = await geminiRes.json();
-    if (!geminiRes.ok) {
-      const errMsg = data?.error?.message || geminiRes.statusText;
-      console.error('[Gemini API error]', geminiRes.status, errMsg);
-      return res.status(502).json({ error: `Gemini error: ${errMsg}` });
-    }
-
-    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from AI.';
+    const reply = (await callGemini(message, {
+      systemPrompt,
+      history,
+      maxOutputTokens: 512,
+      temperature:     0.7,
+    })) || 'No response from AI.';
 
     await pool.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['assistant', reply]);
     res.json({ response: reply });
   } catch (err) {
+    const status = err.geminiError ? 502 : 500;
     console.error('[POST /api/chat]', err.message);
-    res.status(500).json({ error: `Chat error: ${err.message}` });
+    res.status(status).json({ error: err.message });
   }
 });
 

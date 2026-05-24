@@ -1,0 +1,48 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   DEVICE BAR — status strip below header: online status · device · plant chip
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.device-bar {
+  background: rgba(255,255,255,.02);
+  border-bottom: 1px solid #0f1e2e;
+}
+.device-bar-inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: .6rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.db-item  { display: flex; align-items: center; gap: 6px; }
+.db-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #2a3f58;
+}
+.db-val       { color: #7a94b0; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.db-val.green { color: #3dffa0; }
+.db-val.amber { color: #f5a524; }
+
+/* Online / offline dot */
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.status-dot.online  { background: #3dffa0; box-shadow: 0 0 6px #3dffa0; animation: blink 1.8s ease-in-out infinite; }
+.status-dot.offline { background: #ff4d6d; }
+
+/* Active plant chip — pushed to the right */
+.db-plant-chip  { margin-left: auto; }
+.db-plant-emoji { font-size: 1rem; }
+
+@media (max-width: 640px) {
+  .db-plant-chip { margin-left: 0; }
+}

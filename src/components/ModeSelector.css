@@ -1,0 +1,38 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   MODE SELECTOR — Manual / Rules / AI Pilot button group
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.mode-selector     { margin-bottom: 1rem; }
+.mode-selector-row { display: flex; gap: .75rem; }
+
+.mode-btn {
+  flex: 1;
+  background: rgba(10,20,35,.7);
+  border: 1px solid #1a2d42;
+  border-radius: 14px;
+  padding: .85rem 1rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+  transition: border-color .2s, background .2s, box-shadow .2s;
+  outline: none;
+  user-select: none;
+}
+.mode-btn:hover:not(:disabled):not(.active) { border-color: #2a3f58; background: rgba(15,28,48,.85); }
+.mode-btn:disabled { opacity: .6; cursor: wait; }
+.mode-btn.active   { border-color: rgba(61,255,160,.45); background: rgba(61,255,160,.06); box-shadow: 0 0 20px rgba(61,255,160,.08); }
+
+.mode-btn-icon  { font-size: 1.4rem; line-height: 1; }
+.mode-btn-label { font-size: 12px; font-weight: 700; letter-spacing: .06em; color: #7a94b0; transition: color .2s; }
+.mode-btn.active .mode-btn-label { color: #3dffa0; }
+.mode-btn-desc  { font-size: 10px; color: #2a3f58; line-height: 1.3; }
+
+@media (max-width: 640px) {
+  .mode-selector-row { gap: .5rem; }
+  .mode-btn          { padding: .65rem .5rem; }
+  .mode-btn-icon     { font-size: 1.2rem; }
+  .mode-btn-desc     { display: none; }
+}
