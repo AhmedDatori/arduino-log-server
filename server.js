@@ -662,7 +662,7 @@ async function control(device, val) {
 // ── Chat ──────────────────────────────────────────────────────────
 var chatBusy = false;
 function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+  return String(str).split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;').split('\n').join('<br>');
 }
 function scrollChat() { var c=document.getElementById('chat-msgs'); if(c) c.scrollTop=c.scrollHeight; }
 function fillHint(text) { var inp=document.getElementById('chat-input'); if(inp){inp.value=text;inp.focus();} }
