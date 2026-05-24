@@ -96,6 +96,26 @@ async function callGeminiJSON(userText, options = {}) {
   return JSON.parse(match[0]);
 }
 
+// ─── Trend helper (linear regression slope) ───────────────────────
+// Returns change-per-reading (negative = falling, positive = rising)
+function computeTrend(values) {
+  const n = values.length;
+  if (n < 2) return 0;
+  const xMean = (n - 1) / 2;
+  const yMean = values.reduce((a, b) => a + b, 0) / n;
+  let num = 0, den = 0;
+  values.forEach((y, x) => { num += (x - xMean) * (y - yMean); den += (x - xMean) ** 2; });
+  return den === 0 ? 0 : num / den;
+}
+
+// ─── AI feature caches ────────────────────────────────────────────
+const predCache     = { data: null, at: 0 };
+const rcCache       = { data: null, at: 0 };
+const modelCache    = { data: null, at: 0 };
+const PRED_TTL      = 10 * 60 * 1000;  // 10 min
+const RC_TTL        = 15 * 60 * 1000;  // 15 min
+const MODEL_TTL     = 60 * 60 * 1000;  // 1 hour
+
 // ─── Autopilot: pump timer ─────────────────────────────────────────
 let pumpTimer = null;
 
@@ -404,6 +424,21 @@ async function initDB() {
       risk_level  TEXT        NOT NULL DEFAULT 'low',
       actions     JSONB,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS experiments (
+      id               SERIAL      PRIMARY KEY,
+      name             TEXT        NOT NULL,
+      hypothesis       TEXT,
+      strategy_a       JSONB       NOT NULL,
+      strategy_b       JSONB       NOT NULL,
+      duration_days    INT         NOT NULL DEFAULT 7,
+      started_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ended_at         TIMESTAMPTZ,
+      result           JSONB,
+      status           TEXT        NOT NULL DEFAULT 'running'
     )
   `);
 
@@ -1005,6 +1040,313 @@ app.post('/api/autopilot/run', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// FEATURE 2: Predictive Plant Stress Detection
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/predictions', async (req, res) => {
+  try {
+    if (Date.now() - predCache.at < PRED_TTL && predCache.data) return res.json(predCache.data);
+
+    const { rows } = await pool.query(`
+      SELECT soil, water, light, temp, hum, timestamp
+      FROM logs WHERE timestamp > NOW() - INTERVAL '6 hours'
+      ORDER BY timestamp ASC
+    `);
+
+    if (rows.length < 3) {
+      return res.json({ predictions: [], overall_outlook: 'Not enough data yet — need at least 3 readings over 6 hours.', generated_at: new Date().toISOString() });
+    }
+
+    const extract = (key) => rows.filter(r => r[key] != null).map(r => Number(r[key]));
+    const soilV = extract('soil');  const waterV = extract('water');
+    const lightV = extract('light'); const tempV  = extract('temp'); const humV = extract('hum');
+
+    const firstMs = new Date(rows[0].timestamp).getTime();
+    const lastMs  = new Date(rows[rows.length - 1].timestamp).getTime();
+    const spanH   = ((lastMs - firstMs) / 3_600_000).toFixed(1);
+    const intMin  = rows.length > 1 ? ((lastMs - firstMs) / (rows.length - 1) / 60_000).toFixed(0) : '?';
+    const last    = rows[rows.length - 1];
+
+    const prompt = `You are an expert plant stress prediction AI. Analyze these sensor trends from the last ${spanH} hours and predict upcoming plant stress events.
+
+Current readings: soil=${last.soil ?? 'N/A'}%, water=${last.water ?? 'N/A'} raw, light=${last.light ?? 'N/A'}%, temp=${last.temp ?? 'N/A'}°C, humidity=${last.hum ?? 'N/A'}%
+
+Trend (change per reading; readings every ~${intMin} min):
+- Soil:  ${computeTrend(soilV).toFixed(3)} %/reading  (${soilV.length} readings, ${soilV.length > 0 ? Math.min(...soilV) : 'N/A'}–${soilV.length > 0 ? Math.max(...soilV) : 'N/A'}%)
+- Water: ${computeTrend(waterV).toFixed(3)} raw/reading
+- Light: ${computeTrend(lightV).toFixed(3)} %/reading
+- Temp:  ${computeTrend(tempV).toFixed(3)} °C/reading
+- Hum:   ${computeTrend(humV).toFixed(3)} %/reading
+
+Based on ${rows.length} readings over ${spanH} hours, predict stress events. Use real timing (e.g. "in ~2 hours", "by tonight"). Only flag real risks with clear trend evidence.
+
+Return ONLY valid JSON (no markdown):
+{
+  "predictions": [
+    {
+      "type": "water_stress|heat_stress|low_light_stress|overwatering_risk|humidity_problem|sensor_failure",
+      "severity": "low|medium|high|critical",
+      "title": "short title",
+      "description": "precise prediction with timing based on the trend rate",
+      "time_estimate": "e.g. '~2 hours' or 'by 9:30 PM'",
+      "recommended_action": "what to do and when",
+      "confidence": "low|medium|high"
+    }
+  ],
+  "overall_outlook": "1-2 sentence plant outlook for the next few hours",
+  "next_check": "when to check again"
+}`;
+
+    const result = await callGeminiJSON(prompt, { maxOutputTokens: 800, temperature: 0.2 });
+    predCache.data = { ...result, generated_at: new Date().toISOString(), readings: rows.length, span_hours: spanH };
+    predCache.at   = Date.now();
+    res.json(predCache.data);
+  } catch (err) {
+    console.error('[PREDICTIONS]', err.message);
+    res.status(500).json({ error: err.message, predictions: [] });
+  }
+});
+
+// Force refresh predictions
+app.post('/api/predictions/refresh', (_req, res) => { predCache.at = 0; res.json({ ok: true }); });
+
+// ═══════════════════════════════════════════════════════════════════
+// FEATURE 6: AI Root Cause Analysis
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/root-cause', async (req, res) => {
+  try {
+    const force = req.query.force === '1';
+    if (!force && Date.now() - rcCache.at < RC_TTL && rcCache.data) return res.json(rcCache.data);
+
+    const [{ rows: healthRows }, { rows: logRows }] = await Promise.all([
+      pool.query('SELECT score, status, created_at FROM health_scores ORDER BY created_at DESC LIMIT 20'),
+      pool.query(`SELECT soil, water, light, temp, hum, timestamp FROM logs WHERE timestamp > NOW() - INTERVAL '12 hours' ORDER BY timestamp DESC LIMIT 48`),
+    ]);
+
+    if (healthRows.length < 2 && logRows.length < 5) {
+      return res.json({ analysis: null, message: 'Not enough data for root cause analysis — need health score history and recent logs.' });
+    }
+
+    const currentScore  = healthRows[0]?.score ?? 'N/A';
+    const previousScore = healthRows[1]?.score ?? 'N/A';
+    const scoreDelta    = (typeof currentScore === 'number' && typeof previousScore === 'number') ? currentScore - previousScore : 0;
+
+    const scoreHistory  = healthRows.slice(0, 10).map(r => `${r.score} (${r.status}) at ${new Date(r.created_at).toLocaleTimeString()}`).join('\n  ');
+    const logSummary    = logRows.slice(0, 24).map(r =>
+      `soil:${r.soil ?? '—'}% water:${r.water ?? '—'} light:${r.light ?? '—'}% temp:${r.temp ?? '—'}°C hum:${r.hum ?? '—'}%`
+    ).join('\n  ');
+
+    const prompt = `You are an expert plant health AI analyst. Perform a root cause analysis of the current plant health situation.
+
+Health Score History (newest first):
+  ${scoreHistory}
+
+Current: ${currentScore}/100 | Previous: ${previousScore}/100 | Change: ${scoreDelta > 0 ? '+' : ''}${scoreDelta} points
+
+Last 24 Sensor Readings (newest first):
+  ${logSummary}
+
+Identify the REAL reasons for the current health score. Be specific — name exact values and durations. Do not guess; only cite what the data shows.
+
+Return ONLY valid JSON (no markdown):
+{
+  "current_score": ${currentScore},
+  "trend": "improving|stable|declining",
+  "primary_cause": "The single main driver of the current health situation with specific values",
+  "secondary_causes": ["other contributing factor with data", "..."],
+  "sensor_analysis": {
+    "soil":  { "status": "ok|warning|critical", "note": "specific observation" },
+    "water": { "status": "ok|warning|critical", "note": "specific observation" },
+    "light": { "status": "ok|warning|critical", "note": "specific observation" },
+    "temp":  { "status": "ok|warning|critical", "note": "specific observation" },
+    "hum":   { "status": "ok|warning|critical", "note": "specific observation" }
+  },
+  "timeline": "Brief narrative of what happened chronologically and why the score is where it is",
+  "recovery_steps": ["concrete step 1", "concrete step 2", "concrete step 3"]
+}`;
+
+    const result = await callGeminiJSON(prompt, { maxOutputTokens: 800, temperature: 0.2 });
+    rcCache.data = { ...result, generated_at: new Date().toISOString() };
+    rcCache.at   = Date.now();
+    res.json(rcCache.data);
+  } catch (err) {
+    console.error('[ROOT-CAUSE]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/root-cause/refresh', (_req, res) => { rcCache.at = 0; res.json({ ok: true }); });
+
+// ═══════════════════════════════════════════════════════════════════
+// FEATURE 7: AI Experiment Mode
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/experiments', async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM experiments ORDER BY started_at DESC');
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/experiments', async (req, res) => {
+  try {
+    const { name, hypothesis, strategy_a, strategy_b, duration_days = 7 } = req.body;
+    if (!name || !strategy_a || !strategy_b) return res.status(400).json({ error: 'name, strategy_a and strategy_b are required' });
+    const { rows } = await pool.query(
+      `INSERT INTO experiments (name, hypothesis, strategy_a, strategy_b, duration_days) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [name, hypothesis || null, JSON.stringify(strategy_a), JSON.stringify(strategy_b), duration_days]
+    );
+    res.json(rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/experiments/:id/end', async (req, res) => {
+  try {
+    const { rows: expRows } = await pool.query('SELECT * FROM experiments WHERE id = $1', [req.params.id]);
+    if (!expRows.length) return res.status(404).json({ error: 'Experiment not found' });
+    const exp = expRows[0];
+
+    const { rows: logs } = await pool.query(
+      `SELECT soil, water, light, temp, hum, pump, timestamp FROM logs WHERE timestamp >= $1 ORDER BY timestamp ASC`,
+      [exp.started_at]
+    );
+
+    const logSample = logs.slice(0, 60).map(r => `soil:${r.soil ?? '—'}% water:${r.water ?? '—'} pump:${r.pump ? 'ON' : 'off'}`).join('\n');
+
+    const prompt = `Analyze this plant watering experiment and provide results.
+
+Experiment: "${exp.name}"
+Hypothesis: ${exp.hypothesis || 'N/A'}
+Duration planned: ${exp.duration_days} days | Data collected: ${logs.length} readings
+
+Strategy A: ${JSON.stringify(exp.strategy_a)}
+Strategy B: ${JSON.stringify(exp.strategy_b)}
+
+Sensor log sample (${Math.min(logs.length, 60)} of ${logs.length} readings):
+${logSample}
+
+Analyze what happened and which strategy performed better. Use specific numbers where possible.
+
+Return ONLY valid JSON (no markdown):
+{
+  "winner": "a|b|tie",
+  "conclusion": "Main conclusion from the experiment",
+  "strategy_a_result": { "summary": "...", "strengths": "...", "weaknesses": "..." },
+  "strategy_b_result": { "summary": "...", "strengths": "...", "weaknesses": "..." },
+  "key_insight": "The single most important thing learned",
+  "recommendation": "Which strategy to use going forward and why"
+}`;
+
+    const result = await callGeminiJSON(prompt, { maxOutputTokens: 900, temperature: 0.3 });
+    await pool.query(
+      `UPDATE experiments SET status = 'completed', ended_at = NOW(), result = $1 WHERE id = $2`,
+      [JSON.stringify(result), exp.id]
+    );
+    const { rows: updated } = await pool.query('SELECT * FROM experiments WHERE id = $1', [exp.id]);
+    res.json(updated[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/experiments/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM experiments WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// FEATURE 8: Personalized Plant Care Model
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/plant-model', async (req, res) => {
+  try {
+    const force = req.query.force === '1';
+    if (!force && Date.now() - modelCache.at < MODEL_TTL && modelCache.data) return res.json(modelCache.data);
+
+    const { rows } = await pool.query(`
+      SELECT soil, water, light, temp, hum, pump, timestamp
+      FROM logs WHERE timestamp > NOW() - INTERVAL '7 days'
+      ORDER BY timestamp ASC
+    `);
+
+    if (rows.length < 20) {
+      return res.json({ model: null, message: `Need more data — have ${rows.length} readings, need at least 20 (about 2-3 days of readings).` });
+    }
+
+    // Drying rate: consecutive non-pump readings
+    const dryingRates = [];
+    for (let i = 1; i < rows.length; i++) {
+      if (!rows[i - 1].pump && !rows[i].pump && rows[i - 1].soil != null && rows[i].soil != null) {
+        const dtH  = (new Date(rows[i].timestamp) - new Date(rows[i - 1].timestamp)) / 3_600_000;
+        const drop = rows[i - 1].soil - rows[i].soil;
+        if (drop > 0 && dtH > 0 && dtH < 2) dryingRates.push(drop / dtH);
+      }
+    }
+
+    // Pump effect: soil change right after pump
+    const pumpEffects = [];
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i - 1].pump && rows[i].soil != null && rows[i - 1].soil != null) {
+        const change = rows[i].soil - rows[i - 1].soil;
+        if (change > 0) pumpEffects.push(change);
+      }
+    }
+
+    // Light by hour
+    const lightHours = {};
+    rows.forEach(r => {
+      if (r.light == null) return;
+      const h = new Date(r.timestamp).getHours();
+      if (!lightHours[h]) lightHours[h] = [];
+      lightHours[h].push(r.light);
+    });
+    const avgLightH = Object.fromEntries(
+      Object.entries(lightHours).map(([h, vs]) => [h, (vs.reduce((a, b) => a + b, 0) / vs.length).toFixed(0)])
+    );
+
+    const soilVals      = rows.filter(r => r.soil  != null).map(r => r.soil);
+    const avgSoil       = soilVals.length ? (soilVals.reduce((a, b) => a + b, 0) / soilVals.length).toFixed(1) : 'N/A';
+    const avgDryRate    = dryingRates.length ? (dryingRates.reduce((a, b) => a + b, 0) / dryingRates.length).toFixed(2) : null;
+    const avgPumpEffect = pumpEffects.length ? (pumpEffects.reduce((a, b) => a + b, 0) / pumpEffects.length).toFixed(1) : null;
+
+    const stats = { readings: rows.length, avg_soil: avgSoil, avg_drying_pct_per_hour: avgDryRate, avg_pump_effect_pct: avgPumpEffect, light_by_hour: avgLightH };
+
+    const prompt = `You are a plant science AI. Build a personalized care model from real greenhouse data.
+
+Data from last 7 days (${rows.length} readings):
+- Average soil moisture: ${avgSoil}%
+- Average drying rate: ${avgDryRate ?? 'N/A'}% per hour (between waterings)
+- Average pump effect: ${avgPumpEffect ?? 'N/A'}% moisture increase per watering cycle
+- Light level by hour of day: ${JSON.stringify(avgLightH)}
+
+Use these real numbers to produce a personalized model for THIS specific greenhouse.
+
+Return ONLY valid JSON (no markdown):
+{
+  "insights": [
+    { "icon": "💧", "title": "Drying Rate", "detail": "specific number-based insight" },
+    { "icon": "⏱️", "title": "Watering Effect", "detail": "specific number-based insight" },
+    { "icon": "☀️", "title": "Light Pattern", "detail": "specific hours + levels from data" },
+    { "icon": "🌱", "title": "Soil Behavior", "detail": "trend and range observation" }
+  ],
+  "hours_to_critical_dryness": "estimated hours from average moisture to critical level, based on drying rate",
+  "recommended_watering_seconds": "optimal pump duration based on pump effect data",
+  "best_light_hours": "hours with strongest natural light (from data)",
+  "low_light_hours": "hours where grow light would help most",
+  "personalized_tip": "one specific, data-driven tip unique to this greenhouse",
+  "summary": "2-3 sentence summary of this greenhouse's specific behavior"
+}`;
+
+    const result = await callGeminiJSON(prompt, { maxOutputTokens: 800, temperature: 0.3 });
+    modelCache.data = { ...result, stats, generated_at: new Date().toISOString() };
+    modelCache.at   = Date.now();
+    res.json(modelCache.data);
+  } catch (err) {
+    console.error('[PLANT-MODEL]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/plant-model/refresh', (_req, res) => { modelCache.at = 0; res.json({ ok: true }); });
 
 // ─── Serve React app (catch-all) ───────────────────────────────────
 app.get('*', (req, res) => {

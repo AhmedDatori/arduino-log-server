@@ -73,3 +73,23 @@ export const setMode   = (mode) => request('/api/mode', {
 });
 export const fetchAutopilotLog = () => request('/api/autopilot/log');
 export const triggerAutopilot  = () => request('/api/autopilot/run', { method: 'POST' });
+
+// ─── Predictions ───────────────────────────────────────────────────
+export const fetchPredictions    = ()  => request('/api/predictions');
+export const refreshPredictions  = ()  => request('/api/predictions/refresh', { method: 'POST' });
+
+// ─── Root Cause Analysis ───────────────────────────────────────────
+export const fetchRootCause      = ()  => request('/api/root-cause');
+export const refreshRootCause    = ()  => request('/api/root-cause/refresh', { method: 'POST' });
+
+// ─── Experiments ───────────────────────────────────────────────────
+export const fetchExperiments  = ()     => request('/api/experiments');
+export const createExperiment  = (data) => request('/api/experiments', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+});
+export const endExperiment     = (id)   => request(`/api/experiments/${id}/end`, { method: 'POST' });
+export const deleteExperiment  = (id)   => request(`/api/experiments/${id}`, { method: 'DELETE' });
+
+// ─── Plant Care Model ─────────────────────────────────────────────
+export const fetchPlantModel   = ()  => request('/api/plant-model');
+export const refreshPlantModel = ()  => request('/api/plant-model/refresh', { method: 'POST' });

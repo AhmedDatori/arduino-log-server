@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import Header      from './components/Header';
-import DeviceBar   from './components/DeviceBar';
-import StatusView  from './components/StatusView';
-import HistoryView from './components/HistoryView';
-import ReportsView from './components/ReportsView';
-import PlantsView  from './components/PlantsView';
-import ChatView    from './components/ChatView';
-import AlertsView  from './components/AlertsView';
+import Header           from './components/Header';
+import DeviceBar        from './components/DeviceBar';
+import StatusView       from './components/StatusView';
+import HistoryView      from './components/HistoryView';
+import ReportsView      from './components/ReportsView';
+import PlantsView       from './components/PlantsView';
+import ChatView         from './components/ChatView';
+import AlertsView       from './components/AlertsView';
+import LabView          from './components/LabView';
 import { fetchLogs, fetchState, fetchNotifications, fetchPlants, fetchMode } from './api';
 
 const REFRESH_MS = 5_000;
@@ -88,6 +89,9 @@ export default function App() {
         )}
         {tab === 'alerts' && (
           <AlertsView alerts={alerts} onAlertsChanged={refresh} />
+        )}
+        {tab === 'lab' && (
+          <LabView />
         )}
       </main>
     </div>

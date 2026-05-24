@@ -8,6 +8,7 @@ const TABS = [
   { id: 'plants',  label: 'Plants'   },
   { id: 'chat',    label: 'AI Chat'  },
   { id: 'alerts',  label: 'Alerts'   },
+  { id: 'lab',     label: '🧪 Lab'   },
 ];
 
 export default function Header({ tab, onTabChange, onRefresh, unreadCount }) {
