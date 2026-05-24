@@ -3,8 +3,6 @@
 const express = require('express');
 const path    = require('path');
 const { Pool } = require('pg');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -20,9 +18,6 @@ const pool = new Pool({
   idleTimeoutMillis:       30_000,
   connectionTimeoutMillis: 5_000,
 });
-
-// ─── AI ────────────────────────────────────────────────────────────
-const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
 // ─── Middleware ────────────────────────────────────────────────────
 app.use(express.json());
@@ -194,9 +189,10 @@ app.post('/api/chat', async (req, res) => {
     const message = String(req.body.message || '').trim();
     if (!message) return res.status(400).json({ error: 'Empty message' });
 
-    if (!process.env.GEMINI_API_KEY) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
       return res.status(503).json({
-        error: 'AI not configured. Add GEMINI_API_KEY in Hostinger environment variables.',
+        error: 'AI not configured — add GEMINI_API_KEY in Hostinger → Node.js → Environment Variables.',
       });
     }
 
@@ -209,7 +205,7 @@ app.post('/api/chat', async (req, res) => {
     const latest       = logsResult.rows[0];
     const systemPrompt = buildSystemPrompt(latest, state);
 
-    // Gemini expects strictly alternating user/model roles
+    // Build strictly alternating user/model history for Gemini
     const history = [];
     let lastRole = null;
     for (const row of [...historyResult.rows].reverse()) {
@@ -220,18 +216,40 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
+    // Save user message before calling Gemini
     await pool.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['user', message]);
 
-    const model  = genai.getGenerativeModel({ model: 'gemini-2.0-flash-lite', systemInstruction: systemPrompt });
-    const chat   = model.startChat({ history, generationConfig: { maxOutputTokens: 512 } });
-    const result = await chat.sendMessage(message);
-    const reply  = result.response.text();
+    // Call Gemini REST API directly — no SDK dependency
+    const geminiRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: [
+            ...history,
+            { role: 'user', parts: [{ text: message }] },
+          ],
+          generationConfig: { maxOutputTokens: 512 },
+        }),
+      }
+    );
+
+    const data  = await geminiRes.json();
+    if (!geminiRes.ok) {
+      const errMsg = data?.error?.message || geminiRes.statusText;
+      console.error('[Gemini API error]', geminiRes.status, errMsg);
+      return res.status(502).json({ error: `Gemini error: ${errMsg}` });
+    }
+
+    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from AI.';
 
     await pool.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['assistant', reply]);
     res.json({ response: reply });
   } catch (err) {
     console.error('[POST /api/chat]', err.message);
-    res.status(500).json({ error: `AI error: ${err.message}` });
+    res.status(500).json({ error: `Chat error: ${err.message}` });
   }
 });
 
