@@ -1,18 +1,14 @@
 'use strict';
 
 const express = require('express');
-
 const app  = express();
 const PORT = process.env.PORT || 3000;
-
-// ── In-memory log store (no file I/O — avoids permission issues) ──
 const logs = [];
 let   nextId = 1;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ── POST /log  ← Arduino sends here ───────────────────────────────
 app.post('/log', (req, res) => {
   const entry = {
     id:      nextId++,
@@ -23,193 +19,500 @@ app.post('/log', (req, res) => {
   };
   logs.unshift(entry);
   if (logs.length > 200) logs.pop();
-  console.log('[LOG]', entry.device, '→', entry.message);
+  console.log('[LOG]', entry.device, '->', entry.message);
   res.json({ success: true, id: entry.id });
 });
 
-// ── GET /api/logs  ← dashboard polls this ─────────────────────────
-app.get('/api/logs', (req, res) => {
-  res.json(logs.slice(0, 100));
-});
+app.get('/api/logs', (req, res) => { res.json(logs.slice(0, 100)); });
 
-// ── DELETE /api/logs  ← clear button ──────────────────────────────
 app.delete('/api/logs', (req, res) => {
-  logs.length = 0;
-  nextId = 1;
+  logs.length = 0; nextId = 1;
   res.json({ success: true });
 });
 
-// ── GET /  ← dashboard UI ─────────────────────────────────────────
-app.get('/', (req, res) => {
-  res.setHeader('Content-Type', 'text/html');
-  res.end(`<!DOCTYPE html>
+// ── Dashboard HTML ────────────────────────────────────────────────
+const HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Arduino Logs</title>
+<title>Plant Monitor</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=JetBrains+Mono:wght@500;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#0b0f1a;--surface:#111827;--border:#1f2d45;
-  --accent:#3b82f6;--cyan:#06b6d4;--green:#22c55e;
-  --text:#e2e8f0;--muted:#64748b;--dim:#334155;
+html,body{height:100%;overflow-x:hidden}
+body{
+  background:#060b11;color:#cdd9e8;
+  font-family:'DM Sans',sans-serif;font-size:14px;line-height:1.5;
 }
-body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px}
-.topbar{
-  background:var(--surface);border-bottom:1px solid var(--border);
-  height:52px;padding:0 1.25rem;display:flex;align-items:center;
-  justify-content:space-between;position:sticky;top:0;z-index:10;
+body::before{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(ellipse 55% 45% at 10% 10%, rgba(61,255,160,0.05) 0%, transparent 65%),
+    radial-gradient(ellipse 45% 40% at 90% 90%, rgba(56,178,248,0.04) 0%, transparent 65%);
 }
-.logo{font-size:1rem;font-weight:700}
-.logo span{color:var(--cyan)}
-.pill{
-  display:inline-flex;align-items:center;gap:5px;
-  padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;
-  background:rgba(34,197,94,.1);color:var(--green);border:1px solid rgba(34,197,94,.25);
+/* ── Header ── */
+header{
+  position:sticky;top:0;z-index:100;height:62px;
+  background:rgba(6,11,17,0.88);backdrop-filter:blur(14px);
+  border-bottom:1px solid #1a2d42;
 }
-.dot{width:6px;height:6px;background:var(--green);border-radius:50%;animation:pulse 2s ease-in-out infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-.actions{display:flex;gap:.4rem}
-.btn{
-  display:inline-flex;align-items:center;gap:5px;
-  padding:5px 12px;border-radius:6px;border:1px solid transparent;
-  font-size:12px;font-weight:500;cursor:pointer;transition:opacity .15s;
+.hinner{
+  max-width:1120px;margin:0 auto;height:100%;
+  padding:0 1.5rem;display:flex;align-items:center;gap:1.25rem;
 }
-.btn:hover{opacity:.8}
-.btn-primary{background:var(--accent);color:#fff}
-.btn-danger{background:transparent;color:#f87171;border-color:rgba(239,68,68,.3)}
-.main{max-width:900px;margin:0 auto;padding:1.25rem}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.6rem;margin-bottom:1.25rem}
-.stat{background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:.9rem 1rem}
-.stat-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:3px}
-.stat-value{font-size:1.5rem;font-weight:700;color:var(--cyan)}
-.stat-value.sm{font-size:.9rem;padding-top:3px;color:var(--text)}
-.section-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:.75rem}
-#list{display:flex;flex-direction:column;gap:6px}
-.entry{
-  background:var(--surface);border:1px solid var(--border);
-  border-left:3px solid var(--accent);border-radius:8px;
-  padding:10px 14px;display:grid;grid-template-columns:32px 1fr;gap:0 10px;
-  animation:fadeIn .2s ease;
+.logo{
+  font-family:'Syne',sans-serif;font-weight:800;font-size:1.05rem;
+  color:#cdd9e8;letter-spacing:-0.02em;white-space:nowrap;
+  display:flex;align-items:center;gap:9px;
 }
-@keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
-.entry-num{color:var(--dim);font-size:11px;padding-top:2px;text-align:right}
-.entry-msg{color:var(--text);font-size:13px;font-weight:500;margin-bottom:4px;word-break:break-all}
-.entry-meta{display:flex;flex-wrap:wrap;gap:8px;font-size:11px;color:var(--muted)}
-.tag-device{color:#7dd3fc}
-.tag-ip{color:#86efac}
-.empty{text-align:center;padding:4rem 0;color:var(--dim)}
-.empty-icon{font-size:2.5rem;margin-bottom:.75rem;opacity:.4}
-#status{font-size:12px;color:var(--muted)}
-.toast{
-  position:fixed;bottom:1.25rem;right:1.25rem;
-  background:var(--surface);border:1px solid var(--border);
-  border-radius:8px;padding:9px 14px;font-size:12px;
-  opacity:0;transform:translateY(6px);transition:all .25s;pointer-events:none;
+.logo-icon{width:26px;height:26px;flex-shrink:0}
+.logo em{color:#3dffa0;font-style:normal}
+/* Tabs */
+.tabs{display:flex;position:relative;gap:0}
+.tab{
+  background:none;border:none;cursor:pointer;
+  font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;
+  letter-spacing:0.09em;text-transform:uppercase;
+  color:#4a6080;padding:8px 20px;transition:color 0.2s;
 }
-.toast.show{opacity:1;transform:none}
+.tab.active{color:#3dffa0}
+.tab-bar{
+  position:absolute;bottom:-1px;height:2px;left:0;width:0;
+  background:#3dffa0;border-radius:2px 2px 0 0;
+  box-shadow:0 0 10px rgba(61,255,160,0.7);
+  transition:transform 0.32s cubic-bezier(.4,0,.2,1),width 0.32s cubic-bezier(.4,0,.2,1);
+}
+/* Header right */
+.h-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.live{
+  display:inline-flex;align-items:center;gap:6px;
+  font-size:10px;font-weight:700;letter-spacing:0.1em;color:#3dffa0;
+  padding:4px 11px;border-radius:20px;
+  border:1px solid rgba(61,255,160,0.28);background:rgba(61,255,160,0.07);
+}
+.pulse{
+  width:6px;height:6px;border-radius:50%;background:#3dffa0;
+  box-shadow:0 0 6px #3dffa0;animation:blink 1.8s ease-in-out infinite;
+}
+@keyframes blink{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.7)}}
+.icon-btn{
+  background:none;border:1px solid #1a2d42;border-radius:8px;
+  color:#7a94b0;padding:6px 11px;cursor:pointer;font-size:15px;
+  transition:all .2s;
+}
+.icon-btn:hover{border-color:#3dffa0;color:#3dffa0}
+/* ── Views ── */
+.view{display:none}.view.active{display:block;animation:fadeUp .3s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.wrap{max-width:1120px;margin:0 auto;padding:1.5rem;position:relative;z-index:1}
+/* ── Stats strip ── */
+.stats-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:1.5rem}
+.stat-chip{
+  background:#0f1a28;border:1px solid #1a2d42;border-radius:14px;padding:16px 20px;
+}
+.stat-chip-label{
+  font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+  color:#4a6080;margin-bottom:8px;
+}
+.stat-chip-val{
+  font-family:'JetBrains Mono',monospace;font-size:1.65rem;font-weight:700;
+  color:#3dffa0;line-height:1;
+}
+.stat-chip-val.sm{font-size:.95rem;color:#cdd9e8;padding-top:3px}
+/* ── Sensor grid ── */
+.sensor-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(185px,1fr));
+  gap:14px;
+}
+/* ── Sensor card ── */
+.scard{
+  background:#0f1a28;border:1px solid #1a2d42;border-radius:18px;
+  padding:20px 14px 18px;
+  display:flex;flex-direction:column;align-items:center;gap:10px;
+  position:relative;overflow:hidden;
+  transition:transform .22s ease,box-shadow .22s ease,border-color .3s ease;
+  opacity:0;animation:cardIn .4s ease forwards;
+}
+.scard::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:2.5px;
+  background:var(--c,#4a6080);border-radius:18px 18px 0 0;opacity:.75;
+}
+.scard:hover{transform:translateY(-4px);box-shadow:0 14px 40px rgba(0,0,0,.45)}
+.scard:nth-child(1){animation-delay:.05s}
+.scard:nth-child(2){animation-delay:.10s}
+.scard:nth-child(3){animation-delay:.15s}
+.scard:nth-child(4){animation-delay:.20s}
+.scard:nth-child(5){animation-delay:.25s}
+@keyframes cardIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+.scard-icon{font-size:1.4rem;line-height:1;margin-bottom:-2px}
+.scard-label{
+  font-size:10px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;
+  color:#4a6080;text-align:center;
+}
+/* Gauge */
+.gauge-wrap{position:relative;width:112px;height:112px}
+.gauge-wrap svg{width:112px;height:112px;display:block}
+.gauge-arc{transition:stroke-dasharray .85s cubic-bezier(.4,0,.2,1)}
+.gauge-center{
+  position:absolute;inset:0;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+}
+.gauge-val{
+  font-family:'JetBrains Mono',monospace;font-size:1.3rem;font-weight:700;
+  color:#cdd9e8;line-height:1;
+}
+/* Big number (temp/hum) */
+.bignum-wrap{
+  flex:1;display:flex;align-items:center;justify-content:center;
+  padding:16px 0;
+}
+.num-val{
+  font-family:'JetBrains Mono',monospace;font-size:2.6rem;font-weight:700;
+  color:#cdd9e8;line-height:1;
+}
+.num-unit{font-size:1.1rem;color:#7a94b0;margin-left:3px}
+.num-na{font-family:'JetBrains Mono',monospace;font-size:1.6rem;color:#4a6080}
+/* Status badge */
+.status-badge{
+  font-size:10px;font-weight:700;letter-spacing:.1em;
+  padding:4px 12px;border-radius:20px;border:1px solid;
+  transition:all .4s ease;
+}
+/* No data */
+.no-data{
+  grid-column:1/-1;text-align:center;padding:5rem 0;color:#4a6080;
+}
+.no-data-icon{font-size:3rem;margin-bottom:1rem;opacity:.3}
+/* ── History view ── */
+.hist-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem}
+.hist-title{font-family:'Syne',sans-serif;font-size:1.1rem;font-weight:700;color:#cdd9e8}
+.btn-clear{
+  background:none;border:1px solid rgba(255,77,109,.3);
+  color:#ff4d6d;border-radius:8px;padding:6px 16px;
+  font-family:'DM Sans',sans-serif;font-size:12px;font-weight:600;
+  cursor:pointer;transition:all .2s;
+}
+.btn-clear:hover{background:rgba(255,77,109,.1);border-color:#ff4d6d}
+.table-wrap{overflow-x:auto;border-radius:14px;border:1px solid #1a2d42}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead{background:#0d1620;border-bottom:1px solid #1a2d42}
+th{
+  padding:11px 14px;text-align:left;font-size:10px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:#4a6080;white-space:nowrap;
+}
+td{
+  padding:10px 14px;border-bottom:1px solid rgba(26,45,66,.5);
+  font-family:'JetBrains Mono',monospace;
+}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(255,255,255,.02)}
+.td-num{color:#2a3f58;font-size:11px}
+.td-time{color:#7a94b0;font-size:11px;white-space:nowrap}
+.td-ago{color:#4a6080;font-size:10px;display:block}
+.td-dev{color:#38b2f8}
+.cv-g{color:#3dffa0}.cv-a{color:#f5a524}.cv-r{color:#ff4d6d}.cv-b{color:#38b2f8}.cv-m{color:#4a6080}
+.empty-row td{text-align:center;padding:3rem;color:#4a6080}
+/* ── Responsive ── */
+@media(max-width:640px){
+  .hinner{padding:0 1rem;gap:.75rem}
+  .logo span:last-child{display:none}
+  .stats-strip{grid-template-columns:1fr 1fr}
+  .stats-strip .stat-chip:last-child{grid-column:span 2}
+  .sensor-grid{grid-template-columns:1fr 1fr}
+  .wrap{padding:1rem}
+  .tab{padding:8px 14px}
+}
+@media(max-width:380px){.sensor-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-<div class="topbar">
-  <div style="display:flex;align-items:center;gap:.6rem">
-    <span class="logo">📡 Arduino <span>Logs</span></span>
-    <span class="pill"><span class="dot"></span>LIVE</span>
+
+<header>
+  <div class="hinner">
+    <div class="logo">
+      <svg class="logo-icon" viewBox="0 0 24 24" fill="none">
+        <path d="M12 22C12 22 4 16 4 9a7 7 0 0 1 10.9-5.8" stroke="#3dffa0" stroke-width="1.6" stroke-linecap="round"/>
+        <path d="M12 22C12 22 20 16 20 9a7 7 0 0 0-3-5.8" stroke="#3dffa0" stroke-width="1.6" stroke-linecap="round"/>
+        <path d="M12 22V11" stroke="#3dffa0" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <span>PLANT<em>.</em>MONITOR</span>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="status"  onclick="switchTab('status')">Status</button>
+      <button class="tab"        data-tab="history" onclick="switchTab('history')">History</button>
+      <div class="tab-bar" id="tab-bar"></div>
+    </nav>
+    <div class="h-right">
+      <div class="live"><span class="pulse"></span>LIVE</div>
+      <button class="icon-btn" onclick="forceRefresh()" title="Refresh">&#8635;</button>
+    </div>
   </div>
-  <div class="actions">
-    <span id="status">Loading…</span>
-    <button class="btn btn-primary" onclick="load()">↻ Refresh</button>
-    <button class="btn btn-danger"  onclick="clearLogs()">🗑 Clear</button>
+</header>
+
+<div class="view active" id="view-status">
+  <div class="wrap">
+    <div class="stats-strip">
+      <div class="stat-chip">
+        <div class="stat-chip-label">Total Logs</div>
+        <div class="stat-chip-val" id="s-total">—</div>
+      </div>
+      <div class="stat-chip">
+        <div class="stat-chip-label">Last Seen</div>
+        <div class="stat-chip-val sm" id="s-last">—</div>
+      </div>
+      <div class="stat-chip">
+        <div class="stat-chip-label">Device</div>
+        <div class="stat-chip-val sm" id="s-device">—</div>
+      </div>
+    </div>
+    <div class="sensor-grid" id="sensor-grid">
+      <div class="no-data">
+        <div class="no-data-icon">&#127807;</div>
+        <div>Waiting for Arduino&#8230;</div>
+      </div>
+    </div>
   </div>
 </div>
 
-<div class="main">
-  <div class="stats">
-    <div class="stat">
-      <div class="stat-label">Total Logs</div>
-      <div class="stat-value" id="s-total">—</div>
+<div class="view" id="view-history">
+  <div class="wrap">
+    <div class="hist-header">
+      <div class="hist-title">Log History</div>
+      <button class="btn-clear" onclick="clearLogs()">&#128465; Clear All</button>
     </div>
-    <div class="stat">
-      <div class="stat-label">Last Seen</div>
-      <div class="stat-value sm" id="s-last">—</div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">Device</div>
-      <div class="stat-value sm" id="s-device">—</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Time</th><th>Device</th>
+            <th>Water</th><th>Soil</th><th>Light</th>
+            <th>Temp</th><th>Hum</th>
+          </tr>
+        </thead>
+        <tbody id="hist-body"></tbody>
+      </table>
     </div>
   </div>
-  <div class="section-title">Recent entries</div>
-  <div id="list"></div>
 </div>
-
-<div class="toast" id="toast"></div>
 
 <script>
-const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-const ago = iso => {
-  const s = Math.floor((Date.now()-new Date(iso))/1000);
-  if(s<60) return s+'s ago';
-  if(s<3600) return Math.floor(s/60)+'m ago';
-  return Math.floor(s/3600)+'h ago';
-};
-
-let last = -1;
-
-async function load(){
-  try{
-    const data = await fetch('/api/logs').then(r=>r.json());
-    document.getElementById('status').textContent = data.length+' logs · '+new Date().toLocaleTimeString();
-    document.getElementById('s-total').textContent  = data.length||'0';
-    document.getElementById('s-last').textContent   = data[0] ? ago(data[0].time) : '—';
-    document.getElementById('s-device').textContent = data[0]?.device ?? '—';
-    if(data.length===last) return;
-    last = data.length;
-    const el = document.getElementById('list');
-    if(!data.length){
-      el.innerHTML='<div class="empty"><div class="empty-icon">📭</div>No logs yet — waiting for Arduino…</div>';
-      return;
-    }
-    el.innerHTML = data.map((l,i)=>\`
-      <div class="entry">
-        <div class="entry-num">\${i+1}</div>
-        <div>
-          <div class="entry-msg">\${esc(l.message)}</div>
-          <div class="entry-meta">
-            <span class="tag-device">📟 \${esc(l.device)}</span>
-            <span class="tag-ip">🌐 \${esc(l.ip)}</span>
-            <span title="\${esc(l.time)}">🕐 \${ago(l.time)}</span>
-          </div>
-        </div>
-      </div>
-    \`).join('');
-  }catch{
-    document.getElementById('status').textContent='⚠ connection error';
-  }
+// ── Tab ──────────────────────────────────────────────────────────
+var currentTab = 'status';
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('active'); });
+  document.querySelector('.tab[data-tab="' + tab + '"]').classList.add('active');
+  document.querySelectorAll('.view').forEach(function(v){ v.classList.remove('active'); });
+  document.getElementById('view-' + tab).classList.add('active');
+  positionBar();
+}
+function positionBar() {
+  var active = document.querySelector('.tab.active');
+  var bar    = document.getElementById('tab-bar');
+  var nav    = document.querySelector('.tabs');
+  if (!active || !bar || !nav) return;
+  var nr = nav.getBoundingClientRect(), ar = active.getBoundingClientRect();
+  bar.style.width     = ar.width + 'px';
+  bar.style.transform = 'translateX(' + (ar.left - nr.left) + 'px)';
 }
 
-async function clearLogs(){
-  if(!confirm('Delete all logs?')) return;
-  await fetch('/api/logs',{method:'DELETE'});
-  last=-1;
-  toast('All logs cleared');
+// ── Parse sensor message ─────────────────────────────────────────
+function parseSensor(msg) {
+  var kv = {};
+  (msg || '').split(',').forEach(function(p) {
+    var i = p.indexOf(':');
+    if (i > 0) kv[p.slice(0,i).trim()] = p.slice(i+1).trim();
+  });
+  function num(k) {
+    return (kv[k] !== undefined && kv[k] !== 'N/A') ? parseFloat(kv[k]) : null;
+  }
+  return { water: num('water'), soil: num('soil'), light: num('light'), temp: num('temp'), hum: num('hum') };
+}
+
+// ── Time ─────────────────────────────────────────────────────────
+function ago(iso) {
+  var s = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (s < 60)   return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  return Math.floor(s/3600) + 'h ago';
+}
+
+// ── SVG gauge ────────────────────────────────────────────────────
+var CIRC = 263.9, MAXARC = 197.9;
+function gauge(pct, color) {
+  var p   = Math.min(100, Math.max(0, isNaN(pct) ? 0 : pct));
+  var arc = (MAXARC * p / 100).toFixed(1);
+  var gap = (CIRC - parseFloat(arc)).toFixed(1);
+  return '<svg viewBox="0 0 120 120">'
+    + '<circle r="42" cx="60" cy="60" fill="none" stroke="#162234" stroke-width="9"'
+    + ' stroke-dasharray="197.9 66.0" transform="rotate(135 60 60)" stroke-linecap="round"/>'
+    + '<circle r="42" cx="60" cy="60" fill="none" stroke="' + color + '" stroke-width="9"'
+    + ' stroke-dasharray="' + arc + ' ' + gap + '" transform="rotate(135 60 60)"'
+    + ' stroke-linecap="round" class="gauge-arc"/>'
+    + '</svg>';
+}
+
+// ── Status helpers ───────────────────────────────────────────────
+var G='#3dffa0',A='#f5a524',R='#ff4d6d',B='#38b2f8',M='#4a6080';
+var GB='rgba(61,255,160,.12)',AB='rgba(245,165,36,.12)',RB='rgba(255,77,109,.12)',BB='rgba(56,178,248,.12)',MB='rgba(74,96,128,.12)';
+
+function waterInfo(v) {
+  if (v===null) return {label:'N/A',  color:M, bg:MB, pct:0};
+  var p = Math.round(v/1023*100);
+  if (v<200)  return {label:'EMPTY',  color:R, bg:RB, pct:p};
+  if (v<500)  return {label:'LOW',    color:A, bg:AB, pct:p};
+  if (v<800)  return {label:'MEDIUM', color:A, bg:AB, pct:p};
+  return             {label:'FULL',   color:G, bg:GB, pct:p};
+}
+function soilInfo(v) {
+  if (v===null) return {label:'N/A', color:M, bg:MB};
+  if (v<30)    return {label:'DRY',  color:R, bg:RB};
+  if (v<60)    return {label:'OK',   color:A, bg:AB};
+  return              {label:'WET',  color:G, bg:GB};
+}
+function lightInfo(v) {
+  if (v===null) return {label:'N/A',    color:M, bg:MB};
+  if (v<20)    return {label:'DARK',   color:M, bg:MB};
+  if (v<60)    return {label:'DIM',    color:A, bg:AB};
+  return              {label:'BRIGHT', color:G, bg:GB};
+}
+function tempInfo(v) {
+  if (v===null) return {label:'N/A',    color:M, bg:MB};
+  if (v<10)    return {label:'COLD',   color:B, bg:BB};
+  if (v>35)    return {label:'HOT',    color:R, bg:RB};
+  return              {label:'NORMAL', color:G, bg:GB};
+}
+function humInfo(v) {
+  if (v===null) return {label:'N/A',   color:M, bg:MB};
+  if (v<30)    return {label:'DRY',   color:R, bg:RB};
+  if (v>70)    return {label:'HUMID', color:B, bg:BB};
+  return              {label:'GOOD',  color:G, bg:GB};
+}
+
+// ── Render helpers ───────────────────────────────────────────────
+function badge(info) {
+  return '<div class="status-badge" style="color:' + info.color + ';background:' + info.bg + ';border-color:' + info.color + '">'
+       + info.label + '</div>';
+}
+function gaugeCard(icon, label, valStr, pct, info) {
+  return '<div class="scard" style="--c:' + info.color + '">'
+    + '<div class="scard-icon">' + icon + '</div>'
+    + '<div class="scard-label">' + label + '</div>'
+    + '<div class="gauge-wrap">' + gauge(pct, info.color)
+    + '<div class="gauge-center"><div class="gauge-val">' + valStr + '</div></div></div>'
+    + badge(info) + '</div>';
+}
+function bigCard(icon, label, val, unit, info) {
+  var inner = val === null
+    ? '<span class="num-na">N/A</span>'
+    : '<span class="num-val">' + val.toFixed(1) + '</span><span class="num-unit">' + unit + '</span>';
+  return '<div class="scard" style="--c:' + info.color + '">'
+    + '<div class="scard-icon">' + icon + '</div>'
+    + '<div class="scard-label">' + label + '</div>'
+    + '<div class="bignum-wrap">' + inner + '</div>'
+    + badge(info) + '</div>';
+}
+function renderCards(s) {
+  var wi = waterInfo(s.water), si = soilInfo(s.soil), li = lightInfo(s.light);
+  var ti = tempInfo(s.temp),   hi = humInfo(s.hum);
+  var wv = s.water !== null ? String(s.water) : '—';
+  var sv = s.soil  !== null ? s.soil  + '%'   : '—';
+  var lv = s.light !== null ? s.light + '%'   : '—';
+  return gaugeCard('&#128167;', 'Water Level',   wv, wi.pct,       wi)
+       + gaugeCard('&#127807;', 'Soil Moisture', sv, s.soil,       si)
+       + gaugeCard('&#9728;',   'Light',         lv, s.light,      li)
+       + bigCard  ('&#127777;', 'Temperature', s.temp, '&#176;C',  ti)
+       + bigCard  ('&#128166;', 'Humidity',    s.hum,  '%',        hi);
+}
+
+// ── History table ────────────────────────────────────────────────
+var cvMap = { G: 'cv-g', A: 'cv-a', R: 'cv-r', B: 'cv-b', M: 'cv-m' };
+function colorCls(color) {
+  if (color===G) return 'cv-g'; if (color===A) return 'cv-a';
+  if (color===R) return 'cv-r'; if (color===B) return 'cv-b';
+  return 'cv-m';
+}
+function cvCell(val, infoFn, display) {
+  if (val===null) return '<span class="cv-m">—</span>';
+  var i = infoFn(val);
+  return '<span class="' + colorCls(i.color) + '">' + display + '</span>';
+}
+function wLabel(v) {
+  if (v===null) return '—';
+  if (v<200) return 'EMPTY'; if (v<500) return 'LOW';
+  if (v<800) return 'MEDIUM'; return 'FULL';
+}
+function renderHistory(data) {
+  if (!data.length) return '<tr class="empty-row"><td colspan="8">No logs yet — waiting for Arduino&#8230;</td></tr>';
+  return data.map(function(l, i) {
+    var s = parseSensor(l.message);
+    var wi = waterInfo(s.water);
+    var t = new Date(l.time);
+    var timeStr = t.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    return '<tr>'
+      + '<td class="td-num">' + (i+1) + '</td>'
+      + '<td class="td-time">' + timeStr + '<span class="td-ago">' + ago(l.time) + '</span></td>'
+      + '<td class="td-dev">'  + l.device + '</td>'
+      + '<td><span class="' + colorCls(wi.color) + '">' + wLabel(s.water) + '</span></td>'
+      + '<td>' + cvCell(s.soil,  soilInfo,  s.soil  !== null ? s.soil  + '%'          : '') + '</td>'
+      + '<td>' + cvCell(s.light, lightInfo, s.light !== null ? s.light + '%'          : '') + '</td>'
+      + '<td>' + cvCell(s.temp,  tempInfo,  s.temp  !== null ? s.temp.toFixed(1) + '\xb0' : '') + '</td>'
+      + '<td>' + cvCell(s.hum,   humInfo,   s.hum   !== null ? s.hum.toFixed(1)  + '%'   : '') + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+// ── Data fetch ───────────────────────────────────────────────────
+var lastCount = -1, lastMsg = '';
+
+async function load() {
+  try {
+    var data = await fetch('/api/logs').then(function(r){ return r.json(); });
+
+    document.getElementById('s-total').textContent  = data.length || '0';
+    document.getElementById('s-last').textContent   = data[0] ? ago(data[0].time) : '—';
+    document.getElementById('s-device').textContent = data[0] ? data[0].device   : '—';
+
+    var grid = document.getElementById('sensor-grid');
+    if (!data.length) {
+      grid.innerHTML = '<div class="no-data"><div class="no-data-icon">&#127807;</div><div>Waiting for Arduino&#8230;</div></div>';
+    } else {
+      var msg = data[0].message;
+      if (msg !== lastMsg || data.length !== lastCount) {
+        grid.innerHTML = renderCards(parseSensor(msg));
+        lastMsg = msg;
+      }
+    }
+    document.getElementById('hist-body').innerHTML = renderHistory(data);
+    lastCount = data.length;
+  } catch(e) { /* silent */ }
+}
+
+async function clearLogs() {
+  if (!confirm('Delete all logs?')) return;
+  await fetch('/api/logs', { method: 'DELETE' });
+  lastCount = -1; lastMsg = '';
   load();
 }
+function forceRefresh() { lastCount = -1; lastMsg = ''; load(); }
 
-function toast(msg){
-  const t=document.getElementById('toast');
-  t.textContent=msg; t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'),2500);
-}
-
-load();
-setInterval(load,5000);
+window.addEventListener('load', function() {
+  positionBar();
+  load();
+  setInterval(load, 5000);
+});
+window.addEventListener('resize', positionBar);
 </script>
 </body>
-</html>`);
+</html>`;
+
+app.get('/', (req, res) => {
+  res.setHeader('Content-Type', 'text/html');
+  res.end(HTML);
 });
 
-// ── Start ──────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
   console.log('Server started on port', PORT);
   console.log('POST /log      <- Arduino');
