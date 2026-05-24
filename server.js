@@ -15,7 +15,12 @@ function readLogs() {
 }
 
 function saveLogs(logs) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(logs));
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(logs));
+  } catch (e) {
+    console.error('⚠ Could not write logs file:', e.message);
+    // Don't crash — logs are lost but server keeps running
+  }
 }
 
 function addLog(message, device, ip) {
@@ -63,8 +68,11 @@ app.delete('/api/logs', (req, res) => {
 });
 
 
+// ── Global crash guards — keep the process alive ──────────────────
+process.on('uncaughtException',  e => console.error('uncaughtException:',  e.message));
+process.on('unhandledRejection', e => console.error('unhandledRejection:', e));
+
 // ── Start ─────────────────────────────────────────────────────────
-// Bind to 0.0.0.0 so Hostinger/reverse-proxy can reach the process
 app.listen(PORT, '0.0.0.0', () => {
   console.log('');
   console.log('  📡  Arduino Log Server');
