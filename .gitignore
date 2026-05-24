@@ -1,2 +1,4 @@
 node_modules/
-logs.json
+.env
+.DS_Store
+# dist/ is intentionally NOT ignored — committed so Hostinger serves it without a build step
