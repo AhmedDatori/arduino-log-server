@@ -63,3 +63,13 @@ export const fetchNotifications  = () => request('/api/notifications');
 export const deleteNotifications = () => request('/api/notifications', { method: 'DELETE' });
 export const ackNotification     = (id) =>
   request(`/api/notifications/${id}/ack`, { method: 'POST' });
+
+// ─── Autopilot / Mode ─────────────────────────────────────────────
+export const fetchMode = () => request('/api/mode');
+export const setMode   = (mode) => request('/api/mode', {
+  method:  'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body:    JSON.stringify({ mode }),
+});
+export const fetchAutopilotLog = () => request('/api/autopilot/log');
+export const triggerAutopilot  = () => request('/api/autopilot/run', { method: 'POST' });

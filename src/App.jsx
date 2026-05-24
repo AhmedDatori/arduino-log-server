@@ -7,7 +7,7 @@ import ReportsView from './components/ReportsView';
 import PlantsView  from './components/PlantsView';
 import ChatView    from './components/ChatView';
 import AlertsView  from './components/AlertsView';
-import { fetchLogs, fetchState, fetchNotifications, fetchPlants } from './api';
+import { fetchLogs, fetchState, fetchNotifications, fetchPlants, fetchMode } from './api';
 
 const REFRESH_MS = 5_000;
 
@@ -17,20 +17,23 @@ export default function App() {
   const [state,   setState]   = useState({ light: false, pump: false, buzzer: false });
   const [alerts,  setAlerts]  = useState([]);
   const [plant,   setPlant]   = useState(null);
+  const [mode,    setMode]    = useState('manual');
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [logsData, stateData, alertsData, plantsData] = await Promise.all([
+      const [logsData, stateData, alertsData, plantsData, modeData] = await Promise.all([
         fetchLogs(),
         fetchState(),
         fetchNotifications(),
         fetchPlants(),
+        fetchMode().catch(() => ({ mode: 'manual' })),
       ]);
       setLogs(logsData);
       setState(stateData);
       setAlerts(alertsData);
       setPlant(plantsData.find(p => p.is_active) ?? null);
+      setMode(modeData.mode ?? 'manual');
     } catch (err) {
       console.error('Refresh error:', err.message);
     } finally {
@@ -67,6 +70,8 @@ export default function App() {
             onStateChange={setState}
             onLogsCleared={refresh}
             loading={loading}
+            mode={mode}
+            onModeChange={setMode}
           />
         )}
         {tab === 'history' && (

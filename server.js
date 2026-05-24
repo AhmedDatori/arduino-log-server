@@ -27,9 +27,17 @@ app.use(express.static(path.join(__dirname, 'dist')));
 // ─── DB Helpers ────────────────────────────────────────────────────
 async function getActuatorState() {
   const { rows } = await pool.query(
-    'SELECT light, pump, buzzer FROM actuator_state WHERE id = 1'
+    'SELECT light, pump, buzzer, pump_off_at FROM actuator_state WHERE id = 1'
   );
-  return rows[0] ?? { light: false, pump: false, buzzer: false };
+  if (!rows.length) return { light: false, pump: false, buzzer: false };
+  let s = rows[0];
+  // Auto-expire pump timer (reliable even after server restart)
+  if (s.pump && s.pump_off_at && new Date(s.pump_off_at) <= new Date()) {
+    await pool.query('UPDATE actuator_state SET pump = FALSE, pump_off_at = NULL WHERE id = 1');
+    s = { ...s, pump: false, pump_off_at: null };
+    console.log('[PUMP] Timer expired — pump OFF');
+  }
+  return { light: s.light, pump: s.pump, buzzer: s.buzzer };
 }
 
 async function getActivePlant() {
@@ -37,6 +45,202 @@ async function getActivePlant() {
     'SELECT * FROM plant_profiles WHERE is_active = TRUE LIMIT 1'
   );
   return rows[0] ?? null;
+}
+
+// ─── Mode helpers ─────────────────────────────────────────────────
+async function getMode() {
+  const { rows } = await pool.query('SELECT mode FROM settings WHERE id = 1');
+  return rows[0]?.mode ?? 'manual';
+}
+
+// ─── Autopilot: pump timer ─────────────────────────────────────────
+let pumpTimer = null;
+
+async function schedulePumpOff(seconds) {
+  const clampedSec = Math.min(Math.max(Number(seconds) || 5, 1), 30); // 1–30s
+  const offAt = new Date(Date.now() + clampedSec * 1000);
+  await pool.query('UPDATE actuator_state SET pump = TRUE, pump_off_at = $1, updated_at = NOW() WHERE id = 1', [offAt]);
+  if (pumpTimer) clearTimeout(pumpTimer);
+  pumpTimer = setTimeout(async () => {
+    await pool.query('UPDATE actuator_state SET pump = FALSE, pump_off_at = NULL, updated_at = NOW() WHERE id = 1');
+    console.log(`[PUMP] Auto-off after ${clampedSec}s`);
+    pumpTimer = null;
+  }, clampedSec * 1000);
+  return clampedSec;
+}
+
+async function applyAutopilotActions(actions) {
+  const { pump, pump_duration_seconds, light, buzzer } = actions;
+  if (light  !== null && light  !== undefined) await pool.query('UPDATE actuator_state SET light  = $1, updated_at = NOW() WHERE id = 1', [!!light]);
+  if (buzzer !== null && buzzer !== undefined) await pool.query('UPDATE actuator_state SET buzzer = $1, updated_at = NOW() WHERE id = 1', [!!buzzer]);
+  if (pump === true) {
+    const sec = await schedulePumpOff(pump_duration_seconds ?? 8);
+    console.log(`[AUTOPILOT] Pump ON for ${sec}s`);
+  } else if (pump === false) {
+    if (pumpTimer) { clearTimeout(pumpTimer); pumpTimer = null; }
+    await pool.query('UPDATE actuator_state SET pump = FALSE, pump_off_at = NULL, updated_at = NOW() WHERE id = 1');
+  }
+}
+
+// ─── Autopilot: rules engine ───────────────────────────────────────
+async function runRulesEngine(log, state, plant) {
+  const soilMin  = plant?.soil_min  ?? 30;
+  const lightMin = plant?.light_min ?? 30;
+  const tempMax  = plant?.temp_max  ?? 35;
+  const tempMin  = plant?.temp_min  ?? 10;
+  const actions  = { pump: null, pump_duration_seconds: 0, light: null, buzzer: null };
+  const reasons  = [];
+
+  // Soil → pump (only if water not empty)
+  const waterOk = log.water === null || log.water >= 200;
+  if (log.soil !== null && waterOk) {
+    if (log.soil < soilMin * 0.6 && !state.pump) {
+      actions.pump = true; actions.pump_duration_seconds = 10;
+      reasons.push(`Soil critically dry at ${log.soil}% (ideal ≥${soilMin}%) — running pump 10s`);
+    } else if (log.soil < soilMin && !state.pump) {
+      actions.pump = true; actions.pump_duration_seconds = 5;
+      reasons.push(`Soil dry at ${log.soil}% (ideal ≥${soilMin}%) — running pump 5s`);
+    }
+  }
+  if (log.water !== null && log.water < 200 && state.pump) {
+    actions.pump = false;
+    reasons.push(`Water tank empty (${log.water}) — pump forced OFF`);
+  }
+
+  // Light → grow light
+  if (log.light !== null) {
+    if (log.light < lightMin && !state.light) {
+      actions.light = true;
+      reasons.push(`Light low at ${log.light}% (ideal ≥${lightMin}%) — grow light ON`);
+    } else if (log.light >= lightMin + 10 && state.light) {
+      actions.light = false;
+      reasons.push(`Natural light sufficient at ${log.light}% — grow light OFF`);
+    }
+  }
+
+  // Temperature → buzzer alert
+  if (log.temp !== null) {
+    if (log.temp > tempMax && !state.buzzer) {
+      actions.buzzer = true;
+      reasons.push(`Temperature HIGH at ${log.temp}°C (max ${tempMax}°C) — alert`);
+    } else if (log.temp < tempMin && !state.buzzer) {
+      actions.buzzer = true;
+      reasons.push(`Temperature LOW at ${log.temp}°C (min ${tempMin}°C) — alert`);
+    } else if (log.temp >= tempMin && log.temp <= tempMax && state.buzzer) {
+      actions.buzzer = false;
+      reasons.push(`Temperature normal — buzzer OFF`);
+    }
+  }
+
+  const analysis = reasons.length
+    ? reasons.join('. ')
+    : 'All conditions within acceptable range. No actions needed.';
+
+  return {
+    analysis,
+    reasoning: `Rule-based checks against ${plant ? plant.name : 'default'} thresholds.`,
+    risk_level: reasons.length > 1 ? 'high' : reasons.length === 1 ? 'medium' : 'low',
+    actions,
+  };
+}
+
+// ─── Autopilot: AI engine ──────────────────────────────────────────
+async function runAIEngine(log, state, plant) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+
+  const plantCtx = plant
+    ? `Plant: ${plant.emoji} ${plant.name}\nIdeal: Soil ${plant.soil_min}–${plant.soil_max}%, Temp ${plant.temp_min}–${plant.temp_max}°C, Humidity ${plant.hum_min}–${plant.hum_max}%, Light ${plant.light_min}–${plant.light_max}%`
+    : 'No plant profile selected — use general plant care guidelines.';
+
+  const prompt = `You are an AI greenhouse autopilot for an Arduino-based plant monitoring system.
+
+${plantCtx}
+
+Live sensor readings:
+- Soil moisture: ${log.soil ?? 'N/A'}%
+- Water level: ${log.water ?? 'N/A'} raw (0-1023; <200=EMPTY, <500=low, <800=medium, ≥800=full)
+- Light: ${log.light ?? 'N/A'}%
+- Temperature: ${log.temp ?? 'N/A'}°C
+- Humidity: ${log.hum ?? 'N/A'}%
+
+Current actuator state: Pump=${state.pump ? 'ON' : 'OFF'}, Grow light=${state.light ? 'ON' : 'OFF'}, Buzzer=${state.buzzer ? 'ON' : 'OFF'}
+
+SAFETY RULES (strictly enforce):
+1. NEVER run pump if water level < 200 (tank empty)
+2. pump_duration_seconds must be between 1 and 30
+3. Only activate buzzer for critical temperature emergencies
+4. Use null for any actuator you do NOT want to change
+
+Respond ONLY with valid JSON, no markdown:
+{
+  "analysis": "<2-3 sentences assessing current plant conditions>",
+  "reasoning": "<brief explanation of your decisions>",
+  "risk_level": "<'low'|'medium'|'high'|'critical'>",
+  "actions": {
+    "pump": <true|false|null>,
+    "pump_duration_seconds": <integer 1-30, only required if pump is true>,
+    "light": <true|false|null>,
+    "buzzer": <true|false|null>
+  }
+}`;
+
+  const res  = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+    {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 512, temperature: 0.1 },
+      }),
+    }
+  );
+  const data  = await res.json();
+  const text  = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON from Gemini autopilot');
+
+  const decision = JSON.parse(match[0]);
+  // Safety override: block pump if water empty
+  if (log.water !== null && log.water < 200 && decision.actions?.pump === true) {
+    decision.actions.pump = false;
+    decision.analysis += ' (Pump blocked: water tank empty.)';
+  }
+  return decision;
+}
+
+// ─── Autopilot: main dispatcher with cooldown ──────────────────────
+const lastRun = { rules: 0, ai: 0 };
+const COOLDOWN = { rules: 2 * 60 * 1000, ai: 10 * 60 * 1000 }; // 2min / 10min
+
+async function runAutopilot(log) {
+  try {
+    const mode = await getMode();
+    if (mode === 'manual') return;
+
+    const now = Date.now();
+    if (now - lastRun[mode] < COOLDOWN[mode]) return;
+    lastRun[mode] = now;
+
+    const [state, plant] = await Promise.all([getActuatorState(), getActivePlant()]);
+    let decision;
+
+    if (mode === 'rules') decision = await runRulesEngine(log, state, plant);
+    else                  decision = await runAIEngine(log, state, plant);
+
+    // Apply only non-null actions
+    const hasAction = Object.values(decision.actions).some(v => v !== null);
+    if (hasAction) await applyAutopilotActions(decision.actions);
+
+    await pool.query(
+      'INSERT INTO autopilot_log (mode, analysis, reasoning, risk_level, actions) VALUES ($1,$2,$3,$4,$5)',
+      [mode, decision.analysis, decision.reasoning, decision.risk_level, JSON.stringify(decision.actions)]
+    );
+    console.log(`[AUTOPILOT:${mode.toUpperCase()}] ${decision.risk_level} — ${decision.analysis.slice(0, 80)}`);
+  } catch (err) {
+    console.error('[AUTOPILOT error]', err.message);
+  }
 }
 
 function parseSensorMessage(msg) {
@@ -152,6 +356,30 @@ async function initDB() {
       is_preset  BOOLEAN     NOT NULL DEFAULT FALSE,
       is_active  BOOLEAN     NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  // Pump timer column (migration for existing installs)
+  await pool.query('ALTER TABLE actuator_state ADD COLUMN IF NOT EXISTS pump_off_at TIMESTAMPTZ').catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS settings (
+      id         INT         PRIMARY KEY DEFAULT 1,
+      mode       TEXT        NOT NULL DEFAULT 'manual',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS autopilot_log (
+      id          SERIAL      PRIMARY KEY,
+      mode        TEXT        NOT NULL,
+      analysis    TEXT,
+      reasoning   TEXT,
+      risk_level  TEXT        NOT NULL DEFAULT 'low',
+      actions     JSONB,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
 
@@ -397,6 +625,9 @@ app.post('/log', async (req, res) => {
 
     const state = await getActuatorState();
     console.log(`[LOG] #${rows[0].id} | ${device} | water:${s.water} soil:${s.soil}% light:${s.light}% temp:${s.temp}C hum:${s.hum}%`);
+
+    // Fire autopilot without blocking the response
+    runAutopilot(s).catch(e => console.error('[AUTOPILOT]', e.message));
 
     res.json({
       success: true,
@@ -732,6 +963,76 @@ app.delete('/api/plants/:id', async (req, res) => {
     await pool.query('DELETE FROM plant_profiles WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Mode API ──────────────────────────────────────────────────────
+app.get('/api/mode', async (req, res) => {
+  try {
+    const mode = await getMode();
+    res.json({ mode });
+  } catch (err) {
+    console.error('[GET /api/mode]', err.message);
+    res.status(500).json({ mode: 'manual' });
+  }
+});
+
+app.post('/api/mode', async (req, res) => {
+  try {
+    const { mode } = req.body;
+    if (!['manual', 'rules', 'ai'].includes(mode)) {
+      return res.status(400).json({ error: 'Invalid mode. Use manual, rules, or ai.' });
+    }
+    await pool.query('UPDATE settings SET mode = $1, updated_at = NOW() WHERE id = 1', [mode]);
+    console.log(`[MODE] Switched to: ${mode}`);
+    res.json({ mode });
+  } catch (err) {
+    console.error('[POST /api/mode]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Autopilot Log API ─────────────────────────────────────────────
+app.get('/api/autopilot/log', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM autopilot_log ORDER BY created_at DESC LIMIT 10'
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[GET /api/autopilot/log]', err.message);
+    res.status(500).json([]);
+  }
+});
+
+app.post('/api/autopilot/run', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM logs ORDER BY time DESC LIMIT 1');
+    if (!rows.length) return res.status(404).json({ error: 'No sensor data yet' });
+
+    const mode = await getMode();
+    if (mode === 'manual') return res.status(400).json({ error: 'Switch to Rules or AI mode first' });
+
+    const log = rows[0];
+    const s   = { water: log.water, soil: log.soil, light: log.light, temp: log.temp, hum: log.hum };
+    const [state, plant] = await Promise.all([getActuatorState(), getActivePlant()]);
+
+    let decision;
+    if (mode === 'rules') decision = await runRulesEngine(s, state, plant);
+    else                  decision = await runAIEngine(s, state, plant);
+
+    const hasAction = Object.values(decision.actions).some(v => v !== null);
+    if (hasAction) await applyAutopilotActions(decision.actions);
+
+    await pool.query(
+      'INSERT INTO autopilot_log (mode, analysis, reasoning, risk_level, actions) VALUES ($1,$2,$3,$4,$5)',
+      [mode, decision.analysis, decision.reasoning, decision.risk_level, JSON.stringify(decision.actions)]
+    );
+    console.log(`[AUTOPILOT:MANUAL-RUN] ${decision.risk_level} — ${decision.analysis.slice(0, 80)}`);
+    res.json(decision);
+  } catch (err) {
+    console.error('[POST /api/autopilot/run]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

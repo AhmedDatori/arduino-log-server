@@ -2,6 +2,8 @@ import React from 'react';
 import { GaugeCard, BigCard } from './SensorCard';
 import ControlCard from './ControlCard';
 import HealthScore from './HealthScore';
+import ModeSelector from './ModeSelector';
+import AutopilotStatus from './AutopilotStatus';
 import { waterInfo, soilInfo, lightInfo, tempInfo, humInfo } from '../utils';
 
 // ── Plant vs sensor comparison ────────────────────────────────────
@@ -65,7 +67,7 @@ function PlantStatusBar({ latest, plant }) {
   );
 }
 
-export default function StatusView({ latest, state, plant, onStateChange, loading }) {
+export default function StatusView({ latest, state, plant, onStateChange, loading, mode, onModeChange }) {
   // Pull sensor values directly from the latest log row
   const w = latest?.water ?? null;
   const s = latest?.soil  ?? null;
@@ -73,12 +75,18 @@ export default function StatusView({ latest, state, plant, onStateChange, loadin
   const t = latest?.temp  ?? null;
   const h = latest?.hum   ?? null;
 
+  const autoControlled = mode !== 'manual';
+
   return (
     <div className="view-wrap">
 
       <HealthScore />
 
       <PlantStatusBar latest={latest} plant={plant} />
+
+      <h2 className="section-title">Autopilot</h2>
+      <ModeSelector mode={mode} onModeChange={onModeChange} />
+      <AutopilotStatus mode={mode} />
 
       <h2 className="section-title">Sensors</h2>
       <div className="sensor-grid">
@@ -105,6 +113,11 @@ export default function StatusView({ latest, state, plant, onStateChange, loadin
       </div>
 
       <h2 className="section-title">Controls</h2>
+      {autoControlled && (
+        <div className="ctrl-autopilot-note">
+          {mode === 'ai' ? '🤖 AI Pilot' : '⚙️ Rules Engine'} is managing the controls — manual toggles still work as overrides
+        </div>
+      )}
       <div className="ctrl-grid">
         <ControlCard
           id="light"  icon="💡" label="Grow Light"
