@@ -2,7 +2,7 @@
 
 const express   = require('express');
 const { Pool }  = require('pg');
-const Anthropic = require('@anthropic-ai/sdk');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -20,8 +20,8 @@ const pool = new Pool({
   connectionTimeoutMillis: 5000
 });
 
-// ── Anthropic ─────────────────────────────────────────────────────
-const ai = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || '' });
+// ── Google Gemini ─────────────────────────────────────────────────
+const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -125,8 +125,8 @@ app.post('/api/chat', async (req, res) => {
   try {
     const message = String(req.body.message || '').trim();
     if (!message) return res.status(400).json({ error:'Empty message' });
-    if (!process.env.ANTHROPIC_API_KEY)
-      return res.status(503).json({ error:'AI not configured — set ANTHROPIC_API_KEY on Hostinger.' });
+    if (!process.env.GEMINI_API_KEY)
+      return res.status(503).json({ error:'AI not configured — set GEMINI_API_KEY on Hostinger.' });
 
     const [logsR, st, histR] = await Promise.all([
       pool.query('SELECT * FROM logs ORDER BY time DESC LIMIT 5'),
@@ -151,22 +151,23 @@ app.post('/api/chat', async (req, res) => {
            ', Buzzer=' + (st.buzzer?'ON':'OFF') + '\n';
     sys += 'Be brief and actionable. Mention concerns proactively.';
 
+    // Build Google Gemini history (role: 'user' | 'model', parts: [{text}])
     const raw = histR.rows.reverse();
     const history = [];
     let lastRole = null;
     for (const m of raw) {
-      if (m.role !== lastRole) { history.push({ role:m.role, content:m.content }); lastRole = m.role; }
+      if (m.role !== lastRole) {
+        history.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] });
+        lastRole = m.role;
+      }
     }
 
     await pool.query('INSERT INTO conversations(role,content) VALUES($1,$2)', ['user', message]);
 
-    const aiRes = await ai.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 512,
-      system: sys,
-      messages: [...history, { role:'user', content:message }]
-    });
-    const text = aiRes.content[0].type === 'text' ? aiRes.content[0].text : '(no response)';
+    const model  = genai.getGenerativeModel({ model: 'gemini-3.1-flash-lite', systemInstruction: sys });
+    const chat   = model.startChat({ history, generationConfig: { maxOutputTokens: 512 } });
+    const result = await chat.sendMessage(message);
+    const text   = result.response.text();
     await pool.query('INSERT INTO conversations(role,content) VALUES($1,$2)', ['assistant', text]);
 
     res.json({ response: text });
