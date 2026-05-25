@@ -26,14 +26,22 @@ export const fetchConversations  = () => request('/api/conversations');
 export const deleteConversations = () => request('/api/conversations', { method: 'DELETE' });
 
 // Chat returns JSON even on error (the error field shows the real reason)
+// Response shape: { response, action: {type, value, pump_duration_seconds, label, confirm_text} | null }
 export async function sendChatMessage(message) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     body:   formBody({ message }),
   });
   const data = await res.json().catch(() => ({ error: `Server error ${res.status}` }));
-  return data; // caller reads data.response or data.error
+  return data; // caller reads data.response, data.error, data.action
 }
+
+// Execute a device action recommended by the AI chat
+export const executeChatAction = (action) => request('/api/chat/action', {
+  method:  'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body:    JSON.stringify(action),
+});
 
 // ─── Plants ────────────────────────────────────────────────────────
 export const fetchPlants  = () => request('/api/plants');
@@ -101,3 +109,11 @@ export const clearTokenUsage  = () => request('/api/token-usage', { method: 'DEL
 // ─── Hardware Failure Prediction ──────────────────────────────────
 export const fetchHardware    = ()  => request('/api/hardware');
 export const refreshHardware  = ()  => request('/api/hardware/refresh', { method: 'POST' });
+
+// ─── Sensor Fusion ─────────────────────────────────────────────────
+export const fetchFusion      = ()  => request('/api/sensor-fusion');
+export const refreshFusion    = ()  => request('/api/sensor-fusion/refresh', { method: 'POST' });
+
+// ─── AI Experiment Suggestions ─────────────────────────────────────
+export const fetchExperimentSuggestions  = ()  => request('/api/experiments/suggest');
+export const refreshExperimentSuggestions= ()  => request('/api/experiments/suggest/refresh', { method: 'POST' });

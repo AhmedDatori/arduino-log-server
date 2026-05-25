@@ -124,10 +124,15 @@ const predCache     = { data: null, at: 0 };
 const rcCache       = { data: null, at: 0 };
 const modelCache    = { data: null, at: 0 };
 const hwCache       = { data: null, at: 0 };
+const fusionCache   = { data: null, at: 0 };
+const expSugCache   = { data: null, at: 0 };
 const PRED_TTL      = 10 * 60 * 1000;  // 10 min
 const RC_TTL        = 15 * 60 * 1000;  // 15 min
 const MODEL_TTL     = 60 * 60 * 1000;  // 1 hour
 const HW_TTL        = 20 * 60 * 1000;  // 20 min
+const FUSION_TTL    =  5 * 60 * 1000;  //  5 min
+const EXP_SUG_TTL  =  4 * 60 * 60 * 1000; // 4 hours
+let   lastAIExpMs   = 0;
 
 // ─── Autopilot: pump timer ─────────────────────────────────────────
 let pumpTimer = null;
@@ -226,9 +231,26 @@ async function runAIEngine(log, state, plant) {
     ? `Plant: ${plant.emoji} ${plant.name}\nIdeal: Soil ${plant.soil_min}–${plant.soil_max}%, Temp ${plant.temp_min}–${plant.temp_max}°C, Humidity ${plant.hum_min}–${plant.hum_max}%, Light ${plant.light_min}–${plant.light_max}%`
     : 'No plant profile selected — use general plant care guidelines.';
 
+  // Inject active experiment context so AI can follow it
+  let expCtx = '';
+  try {
+    const { rows: activeExp } = await pool.query(
+      "SELECT name, hypothesis, strategy_a, strategy_b, started_at FROM experiments WHERE status = 'running' LIMIT 1"
+    );
+    if (activeExp.length) {
+      const e = activeExp[0];
+      expCtx = `\nACTIVE EXPERIMENT: "${e.name}" (running since ${new Date(e.started_at).toLocaleDateString()})
+Hypothesis: ${e.hypothesis || 'N/A'}
+Strategy A: ${JSON.stringify(e.strategy_a)}
+Strategy B: ${JSON.stringify(e.strategy_b)}
+→ Follow Strategy B conditions when making decisions to properly test this experiment.\n`;
+    }
+  } catch (_) {}
+
+
   const prompt = `You are an AI greenhouse autopilot for an Arduino-based plant monitoring system.
 
-${plantCtx}
+${plantCtx}${expCtx}
 
 Live sensor readings:
 - Soil moisture: ${log.soil ?? 'N/A'}%
@@ -267,6 +289,62 @@ Respond ONLY with valid JSON, no markdown:
   return decision;
 }
 
+// ─── Feature 14: AI auto-creates experiments when pilot mode is active ────────
+async function maybeCreateAIExperiment() {
+  if (Date.now() - lastAIExpMs < EXP_SUG_TTL) return; // once per 4 hours max
+  lastAIExpMs = Date.now(); // claim the slot immediately to prevent races
+
+  try {
+    // Skip if there's already a running experiment
+    const { rows: running } = await pool.query(
+      "SELECT id FROM experiments WHERE status = 'running' LIMIT 1"
+    );
+    if (running.length) return;
+
+    const [{ rows: logs }, plant, { rows: health }] = await Promise.all([
+      pool.query(`SELECT soil, water, light, temp, hum FROM logs WHERE time > NOW() - INTERVAL '7 days' ORDER BY time DESC LIMIT 100`),
+      getActivePlant(),
+      pool.query('SELECT score, status FROM health_scores ORDER BY created_at DESC LIMIT 3'),
+    ]);
+    if (logs.length < 10) return;
+
+    const avg   = (arr) => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : 'N/A';
+    const soilV = logs.filter(r => r.soil  != null).map(r => r.soil);
+    const tempV = logs.filter(r => r.temp  != null).map(r => r.temp);
+    const humV  = logs.filter(r => r.hum   != null).map(r => r.hum);
+    const lightV= logs.filter(r => r.light != null).map(r => r.light);
+
+    const plantCtx = plant
+      ? `Plant: ${plant.emoji} ${plant.name} | Ideal: soil ${plant.soil_min}–${plant.soil_max}%, temp ${plant.temp_min}–${plant.temp_max}°C`
+      : 'No plant profile.';
+
+    const prompt = `You are an AI plant scientist. Design ONE smart A/B experiment for this greenhouse.
+
+${plantCtx}
+${health.length ? `Recent health: ${health.map(h => h.score + '/100 (' + h.status + ')').join(', ')}` : ''}
+7-day averages: soil=${avg(soilV)}%, temp=${avg(tempV)}°C, hum=${avg(humV)}%, light=${avg(lightV)}%
+
+Return ONLY valid JSON (no markdown):
+{
+  "name": "Short experiment name",
+  "hypothesis": "If we [change X], then [metric Y] should improve because [reason]",
+  "strategy_a": { "label": "Current Approach", "description": "Keep current settings", "condition": "existing threshold" },
+  "strategy_b": { "label": "New Approach", "description": "What to test", "condition": "new threshold" },
+  "duration_days": 5
+}`;
+
+    const exp = await callGeminiJSON(prompt, { maxOutputTokens: 500, temperature: 0.4, endpoint: 'experiments' });
+    await pool.query(
+      `INSERT INTO experiments (name, hypothesis, strategy_a, strategy_b, duration_days) VALUES ($1,$2,$3,$4,$5)`,
+      [exp.name, exp.hypothesis, JSON.stringify(exp.strategy_a), JSON.stringify(exp.strategy_b), exp.duration_days ?? 5]
+    );
+    console.log(`[AI-PILOT] Auto-created experiment: "${exp.name}"`);
+  } catch (err) {
+    console.error('[AI-PILOT experiment]', err.message);
+    lastAIExpMs = 0; // reset so it can retry next cycle
+  }
+}
+
 // ─── Autopilot: main dispatcher with cooldown ──────────────────────
 const lastRun = { rules: 0, ai: 0 };
 const COOLDOWN = { rules: 2 * 60 * 1000, ai: 10 * 60 * 1000 }; // 2min / 10min
@@ -295,6 +373,9 @@ async function runAutopilot(log) {
       [mode, decision.analysis, decision.reasoning, decision.risk_level, JSON.stringify(decision.actions)]
     );
     console.log(`[AUTOPILOT:${mode.toUpperCase()}] ${decision.risk_level} — ${decision.analysis.slice(0, 80)}`);
+
+    // Feature 14: AI pilot auto-creates experiments
+    if (mode === 'ai') maybeCreateAIExperiment().catch(() => {});
   } catch (err) {
     console.error('[AUTOPILOT error]', err.message);
   }
@@ -776,16 +857,19 @@ app.post('/api/chat', async (req, res) => {
     // Save user message before calling Gemini
     await pool.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['user', message]);
 
-    const reply = (await callGemini(message, {
+    const rawReply = (await callGemini(message, {
       systemPrompt,
       history,
-      maxOutputTokens: 512,
+      maxOutputTokens: 600,
       temperature:     0.7,
       endpoint:        'chat',
     })) || 'No response from AI.';
 
+    // Extract optional action suggestion from reply
+    const { text: reply, action } = extractChatAction(rawReply);
+
     await pool.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['assistant', reply]);
-    res.json({ response: reply });
+    res.json({ response: reply, action: action ?? null });
   } catch (err) {
     const status = err.geminiError ? 502 : 500;
     console.error('[POST /api/chat]', err.message);
@@ -820,8 +904,48 @@ function buildSystemPrompt(latest, state, plant) {
   p += `Actuators: Light=${state.light?'ON':'OFF'}, Pump=${state.pump?'ON':'OFF'}, Buzzer=${state.buzzer?'ON':'OFF'}\n\n`;
   p += 'Be brief and practical.';
   if (plant) p += ` Always compare readings against the ideal ranges for ${plant.name} and give plant-specific advice.`;
+  p += `\n\nDEVICE CONTROL: If the user asks you to perform a device action OR if sensor data clearly requires immediate intervention, you may suggest one action. Append this block at the VERY END of your reply on its own line (no other text after it):
+[ACTION:{"type":"pump","value":true,"pump_duration_seconds":8,"label":"Run pump for 8 seconds","confirm_text":"Activate the water pump for 8 seconds to hydrate the soil."}]
+Valid types: "pump" (value always true, pump_duration_seconds 1-30), "light" (value true/false), "buzzer" (value true/false).
+ONLY include this block when the user explicitly asks you to control something, or when a sensor reading is critically wrong and requires immediate action. Never include it for general advice.`;
   return p;
 }
+
+// ─── Chat action helper ────────────────────────────────────────────
+function extractChatAction(text) {
+  const match = text.match(/\[ACTION:(\{[\s\S]*?\})\]/);
+  if (!match) return { text: text.trim(), action: null };
+  try {
+    const action   = JSON.parse(match[1]);
+    const cleanText = text.replace(/\[ACTION:[\s\S]*?\]/, '').trim();
+    return { text: cleanText, action };
+  } catch {
+    return { text: text.trim(), action: null };
+  }
+}
+
+// ─── Chat action execution endpoint ───────────────────────────────
+app.post('/api/chat/action', async (req, res) => {
+  try {
+    const { type, value, pump_duration_seconds } = req.body;
+    if (!['pump', 'light', 'buzzer'].includes(type)) {
+      return res.status(400).json({ error: 'Invalid device type' });
+    }
+    if (type === 'pump') {
+      const sec = await schedulePumpOff(pump_duration_seconds ?? 8);
+      await pool.query('UPDATE actuator_state SET pump = TRUE, updated_at = NOW() WHERE id = 1');
+      console.log(`[CHAT-ACTION] Pump ON for ${sec}s (AI-recommended)`);
+      return res.json({ success: true, message: `Pump activated for ${sec} seconds` });
+    }
+    const on = value === true || value === 'true' || value === 1;
+    await pool.query(`UPDATE actuator_state SET ${type} = $1, updated_at = NOW() WHERE id = 1`, [on]);
+    console.log(`[CHAT-ACTION] ${type.toUpperCase()} → ${on ? 'ON' : 'OFF'}`);
+    res.json({ success: true, message: `${type} turned ${on ? 'ON' : 'OFF'}` });
+  } catch (err) {
+    console.error('[POST /api/chat/action]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─── Conversations API ─────────────────────────────────────────────
 app.get('/api/conversations', async (req, res) => {
@@ -1435,6 +1559,143 @@ app.delete('/api/token-usage', async (_req, res) => {
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// FEATURE 13: AI-Based Sensor Fusion
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/sensor-fusion', async (req, res) => {
+  try {
+    const force = req.query.force === '1';
+    if (!force && Date.now() - fusionCache.at < FUSION_TTL && fusionCache.data) return res.json(fusionCache.data);
+
+    const [{ rows }, plant] = await Promise.all([
+      pool.query('SELECT soil, water, light, temp, hum, time FROM logs ORDER BY time DESC LIMIT 3'),
+      getActivePlant(),
+    ]);
+
+    if (!rows.length) return res.json({ fusion: null, message: 'No sensor data yet.' });
+
+    const latest   = rows[0];
+    const plantCtx = plant
+      ? `Plant: ${plant.emoji} ${plant.name} — ideal soil ${plant.soil_min}–${plant.soil_max}%, temp ${plant.temp_min}–${plant.temp_max}°C, hum ${plant.hum_min}–${plant.hum_max}%, light ${plant.light_min}–${plant.light_max}%`
+      : 'No plant profile — use general best-practice ranges.';
+
+    const prompt = `You are a plant science AI that analyzes CROSS-SENSOR RELATIONSHIPS — not individual readings.
+
+${plantCtx}
+Current readings: soil=${latest.soil ?? 'N/A'}%, water=${latest.water ?? 'N/A'} raw (0-1023; <200=empty), light=${latest.light ?? 'N/A'}%, temp=${latest.temp ?? 'N/A'}°C, humidity=${latest.hum ?? 'N/A'}%
+
+Identify patterns that ONLY make sense when combining multiple sensors:
+- soil low + humidity high → root-level dryness (NOT air dryness); environment is fine but roots need water
+- soil low + humidity low → full environmental dryness; both root and air moisture are lacking
+- light low + temp dropping → cold dim day; photosynthesis and growth rate will drop together
+- soil wet + humidity high → overwatering risk; mold/rot possible
+- soil medium + temp high → heat-driven evaporation will drain soil faster than expected
+- water raw < 200 + soil dropping → critical double depletion; tank empty AND roots drying
+- light high + hum low → high transpiration; plant losing water faster than average
+
+Return ONLY valid JSON (no markdown):
+{
+  "fused_state": "2-5 word compound state label (e.g. 'Root-Level Dryness', 'Healthy Equilibrium', 'Cold Dim Growth Day', 'Heat Evaporation Risk')",
+  "state_severity": "ok|warning|critical",
+  "primary_relationship": {
+    "sensors": ["soil", "hum"],
+    "observation": "What these sensors together show — use specific numbers",
+    "interpretation": "The plant-relevant insight that a single sensor CANNOT give"
+  },
+  "secondary_relationships": [
+    { "sensors": ["light", "temp"], "observation": "...", "interpretation": "..." }
+  ],
+  "growth_forecast": "Specific prediction about growth rate/direction for the next 12 hours",
+  "growth_level": "optimal|good|reduced|poor|halted",
+  "priority_insight": "The single most important insight from combining ALL sensors together",
+  "recommendation": "The most important action this compound analysis calls for"
+}`;
+
+    const result = await callGeminiJSON(prompt, { maxOutputTokens: 700, temperature: 0.2, endpoint: 'sensor-fusion' });
+    fusionCache.data = { ...result, generated_at: new Date().toISOString() };
+    fusionCache.at   = Date.now();
+    res.json(fusionCache.data);
+  } catch (err) {
+    console.error('[SENSOR-FUSION]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/sensor-fusion/refresh', (_req, res) => { fusionCache.at = 0; res.json({ ok: true }); });
+
+// ═══════════════════════════════════════════════════════════════════
+// FEATURE 14: AI Experiment Suggestions
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/experiments/suggest', async (req, res) => {
+  try {
+    const force = req.query.force === '1';
+    if (!force && Date.now() - expSugCache.at < EXP_SUG_TTL && expSugCache.data) return res.json(expSugCache.data);
+
+    const [{ rows: logs }, plant, { rows: health }] = await Promise.all([
+      pool.query(`SELECT soil, water, light, temp, hum, time FROM logs WHERE time > NOW() - INTERVAL '7 days' ORDER BY time DESC LIMIT 100`),
+      getActivePlant(),
+      pool.query('SELECT score, status FROM health_scores ORDER BY created_at DESC LIMIT 5'),
+    ]);
+
+    if (logs.length < 10) {
+      return res.json({ suggestions: [], message: `Need more data — have ${logs.length} readings, need ≥10 (about 1 day of readings).` });
+    }
+
+    const avg   = arr => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : 'N/A';
+    const soilV = logs.filter(r => r.soil  != null).map(r => r.soil);
+    const tempV = logs.filter(r => r.temp  != null).map(r => r.temp);
+    const humV  = logs.filter(r => r.hum   != null).map(r => r.hum);
+    const lightV= logs.filter(r => r.light != null).map(r => r.light);
+
+    const plantCtx = plant
+      ? `Active plant: ${plant.emoji} ${plant.name}\nIdeal: soil ${plant.soil_min}–${plant.soil_max}%, temp ${plant.temp_min}–${plant.temp_max}°C, hum ${plant.hum_min}–${plant.hum_max}%, light ${plant.light_min}–${plant.light_max}%`
+      : 'No plant profile — use general best-practice ranges.';
+
+    const prompt = `You are a plant science experiment designer. Based on real greenhouse data, suggest 2 targeted A/B experiments to improve plant health.
+
+${plantCtx}
+${health.length ? `Recent health scores: ${health.map(h => h.score + '/100 (' + h.status + ')').join(', ')}` : 'No health data yet.'}
+
+Observed averages (last 7 days, ${logs.length} readings):
+- Soil moisture: ${avg(soilV)}%
+- Temperature:   ${avg(tempV)}°C
+- Humidity:      ${avg(humV)}%
+- Light:         ${avg(lightV)}%
+
+Rules:
+- Test ONE variable per experiment (soil threshold, watering duration, light schedule, etc.)
+- Strategy A = current/conservative approach (based on the actual data above)
+- Strategy B = the new approach being tested (use specific numbers)
+- Duration 3–7 days; actionable with: pump (soil moisture) and grow light (light level)
+
+Return ONLY valid JSON (no markdown):
+{
+  "suggestions": [
+    {
+      "name": "Clear experiment name",
+      "hypothesis": "If we [do X], then [metric Y] will [improve] because [plant science reason]",
+      "rationale": "1-2 sentences: why this experiment is worth doing given the data above",
+      "strategy_a": { "label": "Current Approach", "description": "Specific current behavior with numbers", "condition": "e.g. pump when soil < 30%" },
+      "strategy_b": { "label": "New Approach", "description": "What to test — specific target values", "condition": "e.g. pump when soil < 45%" },
+      "duration_days": 5,
+      "success_metric": "What measurement will determine the winner",
+      "expected_outcome": "What improvement Strategy B should achieve"
+    }
+  ]
+}`;
+
+    const result = await callGeminiJSON(prompt, { maxOutputTokens: 1000, temperature: 0.4, endpoint: 'experiments' });
+    expSugCache.data = { ...result, generated_at: new Date().toISOString() };
+    expSugCache.at   = Date.now();
+    res.json(expSugCache.data);
+  } catch (err) {
+    console.error('[EXP-SUGGEST]', err.message);
+    res.status(500).json({ error: err.message, suggestions: [] });
+  }
+});
+
+app.post('/api/experiments/suggest/refresh', (_req, res) => { expSugCache.at = 0; res.json({ ok: true }); });
 
 // ═══════════════════════════════════════════════════════════════════
 // FEATURE 12: AI Hardware Failure Prediction

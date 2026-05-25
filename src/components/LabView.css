@@ -417,6 +417,102 @@
 
 .pm-raw-stats { display: flex; gap: .5rem; flex-wrap: wrap; font-size: 10px; color: var(--border); font-family: var(--mono); }
 
+/* ── AI Experiment Suggestions ────────────────────────────────────────────── */
+.exp-sug-panel {
+  background: rgba(6,11,17,.5);
+  border: 1px solid rgba(61,255,160,.18);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+}
+.exp-sug-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+}
+.exp-sug-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  color: var(--accent);
+}
+
+.exp-sug-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: .9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: .65rem;
+  transition: border-color .2s;
+}
+.exp-sug-card:hover { border-color: var(--text-dim); }
+
+.exp-sug-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.exp-sug-name   { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 2px; }
+.exp-sug-hyp    { font-size: 11px; color: var(--text-muted); font-style: italic; line-height: 1.4; }
+.exp-sug-rationale {
+  font-size: 12px;
+  color: var(--text-mid);
+  line-height: 1.5;
+  background: rgba(255,255,255,.02);
+  border-radius: 6px;
+  padding: .45rem .65rem;
+  border-left: 2px solid rgba(61,255,160,.25);
+}
+
+.exp-sug-strategies {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+.exp-sug-strat {
+  flex: 1;
+  min-width: 110px;
+  display: flex;
+  align-items: flex-start;
+  gap: .5rem;
+  border: 1px solid;
+  border-radius: var(--radius-sm);
+  padding: .55rem .7rem;
+}
+.exp-sug-a { border-color: rgba(56,178,248,.25); background: rgba(56,178,248,.04); }
+.exp-sug-b { border-color: rgba(61,255,160,.25); background: rgba(61,255,160,.04); }
+
+.exp-sug-strat-tag {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.exp-sug-a .exp-sug-strat-tag { color: var(--blue);   background: rgba(56,178,248,.15); }
+.exp-sug-b .exp-sug-strat-tag { color: var(--accent); background: rgba(61,255,160,.15); }
+
+.exp-sug-strat-label { font-size: 11px; font-weight: 700; color: var(--text); }
+.exp-sug-strat-desc  { font-size: 11px; color: var(--text-muted); margin-top: 1px; line-height: 1.35; }
+.exp-sug-vs          { font-size: 10px; font-weight: 700; color: var(--text-dim); flex-shrink: 0; }
+
+.exp-sug-footer {
+  display: flex;
+  gap: 1rem;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .lab-panel  { padding: 1.25rem; }

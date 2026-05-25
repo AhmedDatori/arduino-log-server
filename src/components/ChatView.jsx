@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { fetchConversations, deleteConversations, sendChatMessage } from '../api';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { fetchConversations, deleteConversations, sendChatMessage, executeChatAction } from '../api';
 import './ChatView.css';
 
 const HINTS = [
@@ -9,6 +9,10 @@ const HINTS = [
   'What is the temperature trend?',
 ];
 
+const ACTION_ICONS = { pump: '💧', light: '💡', buzzer: '🔔' };
+const ACTION_COLORS = { pump: '#38b2f8', light: '#f5a524', buzzer: '#ff4d6d' };
+
+// ── Typing indicator ───────────────────────────────────────────────────────
 function TypingIndicator() {
   return (
     <div className="message ai">
@@ -20,10 +24,91 @@ function TypingIndicator() {
   );
 }
 
-function Message({ role, content, time }) {
+// ── Action block that appears below AI messages ────────────────────────────
+function ActionBlock({ action, onExecuted }) {
+  const [state,  setState]  = useState('idle'); // idle | confirming | running | done | error
+  const [result, setResult] = useState('');
+
+  const icon  = ACTION_ICONS[action.type]  ?? '⚡';
+  const color = ACTION_COLORS[action.type] ?? '#3dffa0';
+
+  const handleConfirm = async () => {
+    setState('running');
+    try {
+      const res = await executeChatAction({
+        type:                  action.type,
+        value:                 action.value,
+        pump_duration_seconds: action.pump_duration_seconds,
+      });
+      setResult(res.message ?? 'Action completed.');
+      setState('done');
+      if (onExecuted) onExecuted(res);
+    } catch (err) {
+      setResult(err.message);
+      setState('error');
+    }
+  };
+
+  if (state === 'done') {
+    return (
+      <div className="chat-action-result done">
+        <span className="chat-action-result-icon">✓</span>
+        <span>{result}</span>
+      </div>
+    );
+  }
+
+  if (state === 'error') {
+    return (
+      <div className="chat-action-result error">
+        <span className="chat-action-result-icon">✗</span>
+        <span>{result}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="chat-action-block"
+      style={{ '--action-color': color, '--action-bg': `${color}14`, '--action-border': `${color}3a` }}
+    >
+      <div className="chat-action-top">
+        <span className="chat-action-icon">{icon}</span>
+        <div className="chat-action-info">
+          <span className="chat-action-label">AI RECOMMENDED ACTION</span>
+          <span className="chat-action-name">{action.label}</span>
+        </div>
+      </div>
+
+      {action.confirm_text && (
+        <p className="chat-action-confirm-text">{action.confirm_text}</p>
+      )}
+
+      <div className="chat-action-buttons">
+        <button
+          className="chat-action-btn-run"
+          style={{ background: color, color: '#060b11' }}
+          onClick={handleConfirm}
+          disabled={state === 'running'}
+        >
+          {state === 'running' ? '⟳ Running…' : `${icon} ${action.label}`}
+        </button>
+        <button
+          className="chat-action-btn-cancel"
+          onClick={() => setState('done') /* just hide it */}
+          disabled={state === 'running'}
+        >
+          ✗ Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Single message bubble ──────────────────────────────────────────────────
+function Message({ role, content, time, action }) {
   const isUser = role === 'user';
-  // Safely render newlines as line breaks
-  const lines = content.split('\n');
+  const lines  = content.split('\n');
 
   return (
     <div className={`message ${isUser ? 'user' : 'ai'}`}>
@@ -36,6 +121,9 @@ function Message({ role, content, time }) {
           </React.Fragment>
         ))}
       </div>
+      {!isUser && action && (
+        <ActionBlock action={action} />
+      )}
       {time && (
         <div className="msg-time">
           {new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -45,6 +133,7 @@ function Message({ role, content, time }) {
   );
 }
 
+// ── Main ChatView ──────────────────────────────────────────────────────────
 export default function ChatView() {
   const [messages, setMessages] = useState([]);
   const [input,    setInput]    = useState('');
@@ -53,7 +142,7 @@ export default function ChatView() {
 
   useEffect(() => {
     fetchConversations()
-      .then(setMessages)
+      .then(rows => setMessages(rows.map(r => ({ ...r, action: null }))))
       .catch(() => {});
   }, []);
 
@@ -71,6 +160,7 @@ export default function ChatView() {
       role:       'user',
       content:    msg,
       created_at: new Date().toISOString(),
+      action:     null,
     }]);
 
     try {
@@ -79,12 +169,14 @@ export default function ChatView() {
         role:       'assistant',
         content:    res.error || res.response || 'No response received.',
         created_at: new Date().toISOString(),
+        action:     res.action ?? null,
       }]);
     } catch (err) {
       setMessages(prev => [...prev, {
         role:       'assistant',
         content:    `Error: ${err.message}`,
         created_at: new Date().toISOString(),
+        action:     null,
       }]);
     } finally {
       setSending(false);
@@ -107,11 +199,21 @@ export default function ChatView() {
         <button className="btn-danger" onClick={handleClear}>🗑 Clear Chat</button>
       </div>
 
+      {/* Action capabilities hint */}
+      <div className="chat-capabilities">
+        <span className="chat-cap-item">💧 Run pump</span>
+        <span className="chat-cap-div">·</span>
+        <span className="chat-cap-item">💡 Toggle grow light</span>
+        <span className="chat-cap-div">·</span>
+        <span className="chat-cap-item">🔔 Toggle buzzer</span>
+        <span className="chat-cap-note">Ask the AI to take action — confirm before it runs</span>
+      </div>
+
       <div className="chat-messages">
         {showEmpty && (
           <div className="chat-empty">
             <div className="chat-empty-icon">🤖</div>
-            <p>Ask me anything about your plant</p>
+            <p>Ask me anything about your plant — or tell me to do something</p>
             <div className="hint-chips">
               {HINTS.map(hint => (
                 <button key={hint} className="hint-chip" onClick={() => send(hint)}>
@@ -123,7 +225,13 @@ export default function ChatView() {
         )}
 
         {messages.map((msg, i) => (
-          <Message key={i} role={msg.role} content={msg.content} time={msg.created_at} />
+          <Message
+            key={i}
+            role={msg.role}
+            content={msg.content}
+            time={msg.created_at}
+            action={msg.action}
+          />
         ))}
 
         {sending && <TypingIndicator />}
@@ -139,7 +247,7 @@ export default function ChatView() {
           className="chat-input"
           value={input}
           onChange={e => setInput(e.target.value)}
-          placeholder="Ask about your plant..."
+          placeholder="Ask about your plant, or say 'Turn on the pump'…"
           disabled={sending}
           autoComplete="off"
         />

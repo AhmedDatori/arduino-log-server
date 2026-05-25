@@ -5,6 +5,7 @@ import HealthScore from './HealthScore';
 import ModeSelector from './ModeSelector';
 import AutopilotStatus from './AutopilotStatus';
 import PredictionCard from './PredictionCard';
+import SensorFusionCard from './SensorFusionCard';
 import { waterInfo, soilInfo, lightInfo, tempInfo, humInfo } from '../utils';
 import './StatusView.css';
 
@@ -89,6 +90,9 @@ export default function StatusView({ latest, state, plant, onStateChange, loadin
       <h2 className="section-title">Autopilot</h2>
       <ModeSelector mode={mode} onModeChange={onModeChange} />
       <AutopilotStatus mode={mode} />
+
+      <h2 className="section-title">Sensor Intelligence</h2>
+      <SensorFusionCard />
 
       <h2 className="section-title">Stress Forecast</h2>
       <PredictionCard />

@@ -3,6 +3,7 @@ import {
   fetchRootCause, refreshRootCause,
   fetchExperiments, createExperiment, endExperiment, deleteExperiment,
   fetchPlantModel, refreshPlantModel,
+  fetchExperimentSuggestions, refreshExperimentSuggestions,
 } from '../api';
 import HardwarePanel from './HardwarePanel';
 import './LabView.css';
@@ -153,13 +154,18 @@ const BLANK_FORM = {
 };
 
 function ExperimentsPanel() {
-  const [experiments, setExperiments] = useState([]);
-  const [loading,     setLoading]     = useState(true);
-  const [showForm,    setShowForm]    = useState(false);
-  const [form,        setForm]        = useState(BLANK_FORM);
-  const [saving,      setSaving]      = useState(false);
-  const [ending,      setEnding]      = useState(null);
-  const [error,       setError]       = useState('');
+  const [experiments,  setExperiments]  = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [showForm,     setShowForm]     = useState(false);
+  const [form,         setForm]         = useState(BLANK_FORM);
+  const [saving,       setSaving]       = useState(false);
+  const [ending,       setEnding]       = useState(null);
+  const [error,        setError]        = useState('');
+  // AI suggestions state
+  const [suggestions,  setSuggestions]  = useState(null);
+  const [sugLoading,   setSugLoading]   = useState(false);
+  const [showSug,      setShowSug]      = useState(false);
+  const [acceptingIdx, setAcceptingIdx] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -200,6 +206,33 @@ function ExperimentsPanel() {
     catch (err) { setError(err.message); }
   };
 
+  // AI suggestions handlers
+  const loadSuggestions = async (force = false) => {
+    setSugLoading(true);
+    try {
+      if (force) await refreshExperimentSuggestions();
+      setSuggestions(await fetchExperimentSuggestions());
+      setShowSug(true);
+    } catch (err) { setError(err.message); }
+    finally { setSugLoading(false); }
+  };
+
+  const handleAcceptSuggestion = async (sug, idx) => {
+    setAcceptingIdx(idx);
+    try {
+      await createExperiment({
+        name:         sug.name,
+        hypothesis:   sug.hypothesis,
+        strategy_a:   sug.strategy_a,
+        strategy_b:   sug.strategy_b,
+        duration_days: sug.duration_days ?? 5,
+      });
+      await load();
+      setShowSug(false);
+    } catch (err) { setError(err.message); }
+    finally { setAcceptingIdx(null); }
+  };
+
   const pf = (path, val) => setForm(f => {
     const next = { ...f };
     const parts = path.split('.');
@@ -219,12 +252,92 @@ function ExperimentsPanel() {
           <span>🧪</span> Experiment Mode
           <span className="lab-panel-sub">A/B test watering and care strategies over time</span>
         </div>
-        <button className="lab-action-btn" onClick={() => setShowForm(s => !s)}>
-          {showForm ? '✕ Cancel' : '+ New Experiment'}
-        </button>
+        <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap' }}>
+          <button
+            className="lab-refresh-btn"
+            onClick={() => loadSuggestions(showSug)}
+            disabled={sugLoading}
+            title="Ask AI to suggest experiments based on your data"
+          >
+            {sugLoading ? '⟳ Thinking…' : '💡 AI Suggest'}
+          </button>
+          <button className="lab-action-btn" onClick={() => setShowForm(s => !s)}>
+            {showForm ? '✕ Cancel' : '+ New'}
+          </button>
+        </div>
       </div>
 
       {error && <div className="lab-error">{error}</div>}
+
+      {/* AI Suggestions panel */}
+      {showSug && suggestions && (
+        <div className="exp-sug-panel">
+          <div className="exp-sug-header">
+            <span className="exp-sug-title">💡 AI-Suggested Experiments</span>
+            <div style={{ display: 'flex', gap: '.4rem' }}>
+              <button className="lab-refresh-btn" onClick={() => loadSuggestions(true)} disabled={sugLoading}>
+                {sugLoading ? '…' : '↻ New'}
+              </button>
+              <button className="lab-refresh-btn" onClick={() => setShowSug(false)}>✕</button>
+            </div>
+          </div>
+
+          {suggestions.message && (
+            <div className="lab-empty">{suggestions.message}</div>
+          )}
+
+          {(suggestions.suggestions ?? []).map((sug, i) => (
+            <div key={i} className="exp-sug-card">
+              <div className="exp-sug-card-top">
+                <div>
+                  <div className="exp-sug-name">{sug.name}</div>
+                  <div className="exp-sug-hyp">{sug.hypothesis}</div>
+                </div>
+                <button
+                  className="lab-action-btn"
+                  onClick={() => handleAcceptSuggestion(sug, i)}
+                  disabled={acceptingIdx === i}
+                >
+                  {acceptingIdx === i ? 'Creating…' : '✓ Start'}
+                </button>
+              </div>
+
+              {sug.rationale && (
+                <div className="exp-sug-rationale">{sug.rationale}</div>
+              )}
+
+              <div className="exp-sug-strategies">
+                <div className="exp-sug-strat exp-sug-a">
+                  <span className="exp-sug-strat-tag">A</span>
+                  <div>
+                    <div className="exp-sug-strat-label">{sug.strategy_a?.label}</div>
+                    <div className="exp-sug-strat-desc">{sug.strategy_a?.description}</div>
+                  </div>
+                </div>
+                <div className="exp-sug-vs">VS</div>
+                <div className="exp-sug-strat exp-sug-b">
+                  <span className="exp-sug-strat-tag">B</span>
+                  <div>
+                    <div className="exp-sug-strat-label">{sug.strategy_b?.label}</div>
+                    <div className="exp-sug-strat-desc">{sug.strategy_b?.description}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="exp-sug-footer">
+                <span>⏱ {sug.duration_days} days</span>
+                {sug.success_metric && <span>📊 {sug.success_metric}</span>}
+              </div>
+            </div>
+          ))}
+
+          {suggestions.generated_at && (
+            <div className="lab-generated-at">
+              Suggestions generated {new Date(suggestions.generated_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · cached 4h
+            </div>
+          )}
+        </div>
+      )}
 
       {/* New experiment form */}
       {showForm && (
