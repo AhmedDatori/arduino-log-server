@@ -63,6 +63,112 @@
   margin-bottom: 1rem;
 }
 
+/* ── LED Color Picker ─────────────────────────────────────────────────────── */
+.led-color-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 2.5rem;
+  transition: border-color .25s;
+}
+.led-color-panel:hover { border-color: var(--text-dim); }
+
+.led-color-header {
+  display: flex;
+  align-items: center;
+  gap: .85rem;
+  margin-bottom: 1.1rem;
+}
+.led-color-icon  { font-size: 1.5rem; line-height: 1; flex-shrink: 0; }
+.led-color-title { font-size: 14px; font-weight: 700; color: var(--text); }
+.led-color-sub   { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+.led-color-body {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.led-swatch-wrap {
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.led-swatch {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.12);
+  transition: box-shadow .3s;
+}
+.led-swatch-wrap:hover .led-swatch { border-color: rgba(255,255,255,.3); }
+.led-color-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.led-rgb-values {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+}
+.led-rgb-row {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+}
+.led-rgb-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  width: 12px;
+}
+.led-rgb-val {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 2.2em;
+}
+
+.led-hex-display {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dim);
+  letter-spacing: .08em;
+  margin-left: auto;
+}
+
+.led-apply-btn {
+  background: rgba(61,255,160,.1);
+  border: 1px solid rgba(61,255,160,.3);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  padding: .5rem 1.2rem;
+  cursor: pointer;
+  transition: background .2s, border-color .2s, opacity .2s;
+}
+.led-apply-btn:hover    { background: rgba(61,255,160,.18); border-color: rgba(61,255,160,.5); }
+.led-apply-btn:disabled { opacity: .5; cursor: wait; }
+.led-apply-btn.led-saved {
+  background: rgba(61,255,160,.2);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .psb-sensors { grid-template-columns: repeat(2, 1fr); }

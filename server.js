@@ -27,17 +27,19 @@ app.use(express.static(path.join(__dirname, 'dist')));
 // ─── DB Helpers ────────────────────────────────────────────────────
 async function getActuatorState() {
   const { rows } = await pool.query(
-    'SELECT light, pump, buzzer, fan, pump_off_at FROM actuator_state WHERE id = 1'
+    'SELECT light, pump, buzzer, fan, led_r, led_g, led_b, pump_off_at FROM actuator_state WHERE id = 1'
   );
-  if (!rows.length) return { light: false, pump: false, buzzer: false, fan: false };
+  if (!rows.length) return { light: false, pump: false, buzzer: false, fan: false, led_r: 255, led_g: 255, led_b: 0 };
   let s = rows[0];
-  // Auto-expire pump timer (reliable even after server restart)
   if (s.pump && s.pump_off_at && new Date(s.pump_off_at) <= new Date()) {
     await pool.query('UPDATE actuator_state SET pump = FALSE, pump_off_at = NULL WHERE id = 1');
     s = { ...s, pump: false, pump_off_at: null };
     console.log('[PUMP] Timer expired — pump OFF');
   }
-  return { light: s.light, pump: s.pump, buzzer: s.buzzer, fan: s.fan ?? false };
+  return {
+    light: s.light, pump: s.pump, buzzer: s.buzzer, fan: s.fan ?? false,
+    led_r: s.led_r ?? 255, led_g: s.led_g ?? 255, led_b: s.led_b ?? 0,
+  };
 }
 
 async function getActivePlant() {
@@ -436,6 +438,9 @@ async function initDB() {
   `);
   await pool.query(`INSERT INTO actuator_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
   await pool.query('ALTER TABLE actuator_state ADD COLUMN IF NOT EXISTS fan BOOLEAN NOT NULL DEFAULT FALSE').catch(() => {});
+  await pool.query('ALTER TABLE actuator_state ADD COLUMN IF NOT EXISTS led_r INT NOT NULL DEFAULT 255').catch(() => {});
+  await pool.query('ALTER TABLE actuator_state ADD COLUMN IF NOT EXISTS led_g INT NOT NULL DEFAULT 255').catch(() => {});
+  await pool.query('ALTER TABLE actuator_state ADD COLUMN IF NOT EXISTS led_b INT NOT NULL DEFAULT 0').catch(() => {});
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS conversations (
@@ -774,6 +779,9 @@ app.post('/log', async (req, res) => {
       pump:    state.pump   ? 1 : 0,
       buzzer:  state.buzzer ? 1 : 0,
       fan:     state.fan    ? 1 : 0,
+      led_r:   state.led_r,
+      led_g:   state.led_g,
+      led_b:   state.led_b,
     });
   } catch (err) {
     console.error('[POST /log]', err.message);
@@ -828,6 +836,21 @@ app.post('/api/control', async (req, res) => {
     res.json({ success: true, state });
   } catch (err) {
     console.error('[POST /api/control]', err.message);
+    res.status(500).json({ success: false });
+  }
+});
+
+// ─── LED Color API ────────────────────────────────────────────────
+app.post('/api/led-color', async (req, res) => {
+  try {
+    const r = Math.min(255, Math.max(0, parseInt(req.body.r) || 0));
+    const g = Math.min(255, Math.max(0, parseInt(req.body.g) || 0));
+    const b = Math.min(255, Math.max(0, parseInt(req.body.b) || 0));
+    await pool.query('UPDATE actuator_state SET led_r = $1, led_g = $2, led_b = $3, updated_at = NOW() WHERE id = 1', [r, g, b]);
+    console.log(`[LED] Color set to rgb(${r},${g},${b})`);
+    res.json({ success: true, led_r: r, led_g: g, led_b: b });
+  } catch (err) {
+    console.error('[POST /api/led-color]', err.message);
     res.status(500).json({ success: false });
   }
 });
