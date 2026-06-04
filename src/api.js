@@ -18,8 +18,8 @@ export const deleteLogs   = () => request('/api/logs', { method: 'DELETE' });
 
 // ─── Actuators ─────────────────────────────────────────────────────
 export const fetchState   = () => request('/api/state');
-export const postControl  = (device, value) =>
-  request('/api/control', { method: 'POST', body: formBody({ device, value }) });
+export const postControl  = (device, value, extra = {}) =>
+  request('/api/control', { method: 'POST', body: formBody({ device, value, ...extra }) });
 
 // ─── Chat ──────────────────────────────────────────────────────────
 export const fetchConversations  = () => request('/api/conversations');

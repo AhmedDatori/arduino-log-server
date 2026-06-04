@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { postControl } from '../api';
 import './ControlCard.css';
 
-export default function ControlCard({ id, icon, label, hint, isOn, onStateChange }) {
+export default function ControlCard({ id, icon, label, hint, isOn, onStateChange, extraData = {} }) {
   const [loading, setLoading] = useState(false);
 
   const toggle = async (e) => {
@@ -10,7 +10,7 @@ export default function ControlCard({ id, icon, label, hint, isOn, onStateChange
     if (loading) return;
     setLoading(true);
     try {
-      const res = await postControl(id, isOn ? 0 : 1);
+      const res = await postControl(id, isOn ? 0 : 1, extraData);
       if (res.state) onStateChange(res.state);
     } catch (err) {
       console.error(`Control ${id} failed:`, err.message);

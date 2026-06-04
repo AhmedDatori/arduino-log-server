@@ -144,6 +144,7 @@ function LedColorPicker({ r, g, b, onApplied }) {
 }
 
 export default function StatusView({ latest, state, plant, onStateChange, loading, mode, onModeChange }) {
+  const [pumpDuration, setPumpDuration] = useState(10);
   // Pull sensor values directly from the latest log row
   const w = latest?.water ?? null;
   const s = latest?.soil  ?? null;
@@ -169,6 +170,25 @@ export default function StatusView({ latest, state, plant, onStateChange, loadin
 
       <h2 className="section-title">Stress Forecast</h2>
       <PredictionCard />
+
+      <div className="pump-dur-panel">
+        <div className="pump-dur-header">
+          <span>💧</span>
+          <div>
+            <div className="pump-dur-title">Pump Duration</div>
+            <div className="pump-dur-sub">How long the pump runs each time it's activated manually or by autopilot</div>
+          </div>
+          <div className="pump-dur-value">{pumpDuration}s</div>
+        </div>
+        <input
+          type="range" min={1} max={30} value={pumpDuration}
+          className="pump-dur-slider"
+          onChange={e => setPumpDuration(Number(e.target.value))}
+        />
+        <div className="pump-dur-labels">
+          <span>1s</span><span>10s</span><span>20s</span><span>30s</span>
+        </div>
+      </div>
 
       <LedColorPicker
         r={state.led_r ?? 255} g={state.led_g ?? 255} b={state.led_b ?? 0}
@@ -213,10 +233,11 @@ export default function StatusView({ latest, state, plant, onStateChange, loadin
           onStateChange={onStateChange}
         />
         <ControlCard
-          id="pump"   icon="💧" label="Water Pump"
-          hint="Pin D10 — applied on next POST cycle"
+          id="pump" icon="💧" label="Water Pump"
+          hint={`Runs for ${pumpDuration}s then auto-stops`}
           isOn={state.pump}
           onStateChange={onStateChange}
+          extraData={{ duration: pumpDuration }}
         />
         <ControlCard
           id="buzzer" icon="🔔" label="Buzzer"
@@ -226,7 +247,7 @@ export default function StatusView({ latest, state, plant, onStateChange, loadin
         />
         <ControlCard
           id="fan" icon="🌀" label="Fan"
-          hint="Pin 21 — applied on next POST cycle"
+          hint="Relay — on/off only, no speed control"
           isOn={state.fan}
           onStateChange={onStateChange}
         />

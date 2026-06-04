@@ -63,6 +63,52 @@
   margin-bottom: 1rem;
 }
 
+/* ── Pump Duration Panel ──────────────────────────────────────────────────── */
+.pump-dur-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1rem;
+  transition: border-color .25s;
+}
+.pump-dur-panel:hover { border-color: var(--text-dim); }
+
+.pump-dur-header {
+  display: flex;
+  align-items: center;
+  gap: .85rem;
+  margin-bottom: 1rem;
+}
+.pump-dur-header > span { font-size: 1.4rem; flex-shrink: 0; }
+.pump-dur-title { font-size: 14px; font-weight: 700; color: var(--text); }
+.pump-dur-sub   { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+.pump-dur-value {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--accent);
+  min-width: 3ch;
+  text-align: right;
+}
+
+.pump-dur-slider {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+  height: 4px;
+  margin-bottom: .5rem;
+}
+
+.pump-dur-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+
 /* ── LED Color Picker ─────────────────────────────────────────────────────── */
 .led-color-panel {
   background: var(--bg-card);

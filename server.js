@@ -203,6 +203,8 @@ async function runRulesEngine(log, state, plant) {
   }
 
   // Temperature → fan + buzzer alert
+  // Fan uses 2°C hysteresis: turns ON above tempMax, only turns OFF below tempMax-2
+  // This prevents rapid on/off cycling when temperature hovers near the threshold
   if (log.temp !== null) {
     if (log.temp > tempMax) {
       if (!state.fan) {
@@ -218,7 +220,10 @@ async function runRulesEngine(log, state, plant) {
       reasons.push(`Temperature LOW at ${log.temp}°C (min ${tempMin}°C) — alert`);
     } else if (log.temp >= tempMin && log.temp <= tempMax) {
       if (state.buzzer) { actions.buzzer = false; reasons.push(`Temperature normal — buzzer OFF`); }
-      if (state.fan)    { actions.fan    = false; reasons.push(`Temperature normal — fan OFF`); }
+      if (state.fan && log.temp <= tempMax - 2) {
+        actions.fan = false;
+        reasons.push(`Temperature back to safe range — fan OFF`);
+      }
     }
   }
 
@@ -822,17 +827,25 @@ app.get('/api/state', async (req, res) => {
 
 app.post('/api/control', async (req, res) => {
   try {
-    const { device, value } = req.body;
+    const { device, value, duration } = req.body;
     if (!['light', 'pump', 'buzzer', 'fan'].includes(device)) {
       return res.status(400).json({ error: 'Invalid device' });
     }
     const on = value === '1' || value === 1 || value === true || value === 'true';
-    await pool.query(
-      `UPDATE actuator_state SET ${device} = $1, updated_at = NOW() WHERE id = 1`,
-      [on]
-    );
+
+    if (device === 'pump' && on) {
+      // Pump always uses a timer to auto-shutoff — prevents running dry
+      const sec = await schedulePumpOff(duration ?? 10);
+      console.log(`[CTRL] PUMP ON for ${sec}s (manual)`);
+    } else {
+      await pool.query(
+        `UPDATE actuator_state SET ${device} = $1, updated_at = NOW() WHERE id = 1`,
+        [on]
+      );
+      console.log(`[CTRL] ${device.toUpperCase()} -> ${on ? 'ON' : 'OFF'}`);
+    }
+
     const state = await getActuatorState();
-    console.log(`[CTRL] ${device.toUpperCase()} -> ${on ? 'ON' : 'OFF'}`);
     res.json({ success: true, state });
   } catch (err) {
     console.error('[POST /api/control]', err.message);
