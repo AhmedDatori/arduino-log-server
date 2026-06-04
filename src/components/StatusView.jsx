@@ -146,6 +146,12 @@ export default function StatusView({ latest, state, plant, onStateChange, loadin
           isOn={state.buzzer}
           onStateChange={onStateChange}
         />
+        <ControlCard
+          id="fan" icon="🌀" label="Fan"
+          hint="Pin 21 — applied on next POST cycle"
+          isOn={state.fan}
+          onStateChange={onStateChange}
+        />
       </div>
 
     </div>

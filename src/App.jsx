@@ -16,7 +16,7 @@ const REFRESH_MS = 5_000;
 export default function App() {
   const [tab,     setTab]     = useState('status');
   const [logs,    setLogs]    = useState([]);
-  const [state,   setState]   = useState({ light: false, pump: false, buzzer: false });
+  const [state,   setState]   = useState({ light: false, pump: false, buzzer: false, fan: false });
   const [alerts,  setAlerts]  = useState([]);
   const [plant,   setPlant]   = useState(null);
   const [mode,    setMode]    = useState('manual');

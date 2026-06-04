@@ -27,9 +27,9 @@ app.use(express.static(path.join(__dirname, 'dist')));
 // ─── DB Helpers ────────────────────────────────────────────────────
 async function getActuatorState() {
   const { rows } = await pool.query(
-    'SELECT light, pump, buzzer, pump_off_at FROM actuator_state WHERE id = 1'
+    'SELECT light, pump, buzzer, fan, pump_off_at FROM actuator_state WHERE id = 1'
   );
-  if (!rows.length) return { light: false, pump: false, buzzer: false };
+  if (!rows.length) return { light: false, pump: false, buzzer: false, fan: false };
   let s = rows[0];
   // Auto-expire pump timer (reliable even after server restart)
   if (s.pump && s.pump_off_at && new Date(s.pump_off_at) <= new Date()) {
@@ -37,7 +37,7 @@ async function getActuatorState() {
     s = { ...s, pump: false, pump_off_at: null };
     console.log('[PUMP] Timer expired — pump OFF');
   }
-  return { light: s.light, pump: s.pump, buzzer: s.buzzer };
+  return { light: s.light, pump: s.pump, buzzer: s.buzzer, fan: s.fan ?? false };
 }
 
 async function getActivePlant() {
@@ -151,9 +151,10 @@ async function schedulePumpOff(seconds) {
 }
 
 async function applyAutopilotActions(actions) {
-  const { pump, pump_duration_seconds, light, buzzer } = actions;
+  const { pump, pump_duration_seconds, light, buzzer, fan } = actions;
   if (light  !== null && light  !== undefined) await pool.query('UPDATE actuator_state SET light  = $1, updated_at = NOW() WHERE id = 1', [!!light]);
   if (buzzer !== null && buzzer !== undefined) await pool.query('UPDATE actuator_state SET buzzer = $1, updated_at = NOW() WHERE id = 1', [!!buzzer]);
+  if (fan    !== null && fan    !== undefined) await pool.query('UPDATE actuator_state SET fan    = $1, updated_at = NOW() WHERE id = 1', [!!fan]);
   if (pump === true) {
     const sec = await schedulePumpOff(pump_duration_seconds ?? 8);
     console.log(`[AUTOPILOT] Pump ON for ${sec}s`);
@@ -169,7 +170,7 @@ async function runRulesEngine(log, state, plant) {
   const lightMin = plant?.light_min ?? 30;
   const tempMax  = plant?.temp_max  ?? 35;
   const tempMin  = plant?.temp_min  ?? 10;
-  const actions  = { pump: null, pump_duration_seconds: 0, light: null, buzzer: null };
+  const actions  = { pump: null, pump_duration_seconds: 0, light: null, buzzer: null, fan: null };
   const reasons  = [];
 
   // Soil → pump (only if water not empty)
@@ -199,17 +200,23 @@ async function runRulesEngine(log, state, plant) {
     }
   }
 
-  // Temperature → buzzer alert
+  // Temperature → fan + buzzer alert
   if (log.temp !== null) {
-    if (log.temp > tempMax && !state.buzzer) {
-      actions.buzzer = true;
-      reasons.push(`Temperature HIGH at ${log.temp}°C (max ${tempMax}°C) — alert`);
+    if (log.temp > tempMax) {
+      if (!state.fan) {
+        actions.fan = true;
+        reasons.push(`Temperature HIGH at ${log.temp}°C (max ${tempMax}°C) — fan ON`);
+      }
+      if (!state.buzzer) {
+        actions.buzzer = true;
+        reasons.push(`Temperature HIGH at ${log.temp}°C — alert`);
+      }
     } else if (log.temp < tempMin && !state.buzzer) {
       actions.buzzer = true;
       reasons.push(`Temperature LOW at ${log.temp}°C (min ${tempMin}°C) — alert`);
-    } else if (log.temp >= tempMin && log.temp <= tempMax && state.buzzer) {
-      actions.buzzer = false;
-      reasons.push(`Temperature normal — buzzer OFF`);
+    } else if (log.temp >= tempMin && log.temp <= tempMax) {
+      if (state.buzzer) { actions.buzzer = false; reasons.push(`Temperature normal — buzzer OFF`); }
+      if (state.fan)    { actions.fan    = false; reasons.push(`Temperature normal — fan OFF`); }
     }
   }
 
@@ -259,7 +266,7 @@ Live sensor readings:
 - Temperature: ${log.temp ?? 'N/A'}°C
 - Humidity: ${log.hum ?? 'N/A'}%
 
-Current actuator state: Pump=${state.pump ? 'ON' : 'OFF'}, Grow light=${state.light ? 'ON' : 'OFF'}, Buzzer=${state.buzzer ? 'ON' : 'OFF'}
+Current actuator state: Pump=${state.pump ? 'ON' : 'OFF'}, Grow light=${state.light ? 'ON' : 'OFF'}, Buzzer=${state.buzzer ? 'ON' : 'OFF'}, Fan=${state.fan ? 'ON' : 'OFF'}
 
 SAFETY RULES (strictly enforce):
 1. NEVER run pump if water level < 200 (tank empty)
@@ -276,7 +283,8 @@ Respond ONLY with valid JSON, no markdown:
     "pump": <true|false|null>,
     "pump_duration_seconds": <integer 1-30, only required if pump is true>,
     "light": <true|false|null>,
-    "buzzer": <true|false|null>
+    "buzzer": <true|false|null>,
+    "fan": <true|false|null>
   }
 }`;
 
@@ -422,10 +430,12 @@ async function initDB() {
       light      BOOLEAN     NOT NULL DEFAULT FALSE,
       pump       BOOLEAN     NOT NULL DEFAULT FALSE,
       buzzer     BOOLEAN     NOT NULL DEFAULT FALSE,
+      fan        BOOLEAN     NOT NULL DEFAULT FALSE,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
   await pool.query(`INSERT INTO actuator_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+  await pool.query('ALTER TABLE actuator_state ADD COLUMN IF NOT EXISTS fan BOOLEAN NOT NULL DEFAULT FALSE').catch(() => {});
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS conversations (
@@ -763,6 +773,7 @@ app.post('/log', async (req, res) => {
       light:   state.light  ? 1 : 0,
       pump:    state.pump   ? 1 : 0,
       buzzer:  state.buzzer ? 1 : 0,
+      fan:     state.fan    ? 1 : 0,
     });
   } catch (err) {
     console.error('[POST /log]', err.message);
@@ -804,7 +815,7 @@ app.get('/api/state', async (req, res) => {
 app.post('/api/control', async (req, res) => {
   try {
     const { device, value } = req.body;
-    if (!['light', 'pump', 'buzzer'].includes(device)) {
+    if (!['light', 'pump', 'buzzer', 'fan'].includes(device)) {
       return res.status(400).json({ error: 'Invalid device' });
     }
     const on = value === '1' || value === 1 || value === true || value === 'true';
@@ -901,12 +912,12 @@ function buildSystemPrompt(latest, state, plant) {
     p += `  Recorded at:   ${latest.time}\n\n`;
   }
 
-  p += `Actuators: Light=${state.light?'ON':'OFF'}, Pump=${state.pump?'ON':'OFF'}, Buzzer=${state.buzzer?'ON':'OFF'}\n\n`;
+  p += `Actuators: Light=${state.light?'ON':'OFF'}, Pump=${state.pump?'ON':'OFF'}, Buzzer=${state.buzzer?'ON':'OFF'}, Fan=${state.fan?'ON':'OFF'}\n\n`;
   p += 'Be brief and practical.';
   if (plant) p += ` Always compare readings against the ideal ranges for ${plant.name} and give plant-specific advice.`;
   p += `\n\nDEVICE CONTROL: If the user asks you to perform a device action OR if sensor data clearly requires immediate intervention, you may suggest one action. Append this block at the VERY END of your reply on its own line (no other text after it):
 [ACTION:{"type":"pump","value":true,"pump_duration_seconds":8,"label":"Run pump for 8 seconds","confirm_text":"Activate the water pump for 8 seconds to hydrate the soil."}]
-Valid types: "pump" (value always true, pump_duration_seconds 1-30), "light" (value true/false), "buzzer" (value true/false).
+Valid types: "pump" (value always true, pump_duration_seconds 1-30), "light" (value true/false), "buzzer" (value true/false), "fan" (value true/false).
 ONLY include this block when the user explicitly asks you to control something, or when a sensor reading is critically wrong and requires immediate action. Never include it for general advice.`;
   return p;
 }
@@ -928,7 +939,7 @@ function extractChatAction(text) {
 app.post('/api/chat/action', async (req, res) => {
   try {
     const { type, value, pump_duration_seconds } = req.body;
-    if (!['pump', 'light', 'buzzer'].includes(type)) {
+    if (!['pump', 'light', 'buzzer', 'fan'].includes(type)) {
       return res.status(400).json({ error: 'Invalid device type' });
     }
     if (type === 'pump') {
