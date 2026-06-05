@@ -121,10 +121,12 @@ export const fetchFusion      = ()  => request('/api/sensor-fusion');
 export const refreshFusion    = ()  => request('/api/sensor-fusion/refresh', { method: 'POST' });
 
 // ─── Camera & Plant Vision ─────────────────────────────────────────
-export const fetchCameraIp    = ()  => request('/api/camera/ip');
-export const fetchLatestPhoto = ()  => request('/api/camera/latest');
-export const fetchDiagnoses   = ()  => request('/api/diagnoses');
-export const runDiagnosis     = ()  => request('/api/diagnoses/run', { method: 'POST' });
+export const fetchCameraIp    = ()    => request('/api/camera/ip');
+export const fetchLatestFrame = ()    => request('/api/camera/frames/latest');
+export const fetchFrameList   = ()    => request('/api/camera/frames');
+export const fetchFrame       = (id)  => request(`/api/camera/frames/${id}`);
+export const fetchDiagnoses   = ()    => request('/api/diagnoses');
+export const runDiagnosis     = ()    => request('/api/diagnoses/run', { method: 'POST' });
 
 // ─── AI Experiment Suggestions ─────────────────────────────────────
 export const fetchExperimentSuggestions  = ()  => request('/api/experiments/suggest');

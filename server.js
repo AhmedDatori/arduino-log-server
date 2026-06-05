@@ -623,6 +623,18 @@ async function initDB() {
   `);
   await pool.query(`INSERT INTO camera_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
 
+  // Rolling frame buffer for live feed / timeline
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS camera_frames (
+      id         SERIAL      PRIMARY KEY,
+      image_b64  TEXT        NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS camera_frames_time_idx ON camera_frames (created_at DESC)`
+  ).catch(() => {});
+
   // Visual plant diagnoses from Gemini Vision
   await pool.query(`
     CREATE TABLE IF NOT EXISTS plant_diagnoses (
@@ -726,6 +738,14 @@ Respond ONLY with valid JSON, no markdown:
 
   console.log(`[VISION] Diagnosis: ${result.status} (${result.health_score}/100)`);
   return result;
+}
+
+async function diagnosePlantFromLatestFrame() {
+  const { rows } = await pool.query(
+    'SELECT image_b64 FROM camera_frames ORDER BY created_at DESC LIMIT 1'
+  );
+  if (!rows.length) { console.log('[VISION auto] No frames available'); return; }
+  await diagnosePlant(rows[0].image_b64);
 }
 
 // ─── AI Health Score ───────────────────────────────────────────────
@@ -2090,35 +2110,31 @@ app.post('/camera/register', async (req, res) => {
   }
 });
 
-// ─── Camera: receive JPEG upload + trigger AI diagnosis ────────────
-app.post('/camera/photo',
-  express.raw({ type: 'image/jpeg', limit: '2mb' }),
-  async (req, res) => {
-    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-      return res.status(400).json({ error: 'No image data — send raw JPEG with Content-Type: image/jpeg' });
-    }
-    try {
-      const imageBase64 = req.body.toString('base64');
-      console.log(`[CAMERA] Photo received — ${req.body.length} bytes`);
-
-      if (process.env.GEMINI_API_KEY) {
-        // Run asynchronously so we don't block the ESP32 waiting for Gemini
-        diagnosePlant(imageBase64).catch(e => console.error('[VISION async]', e.message));
-      } else {
-        // Store photo without AI so the latest photo endpoint works
-        await pool.query(
-          `INSERT INTO plant_diagnoses (image_b64, status, summary) VALUES ($1, 'unknown', 'AI not configured — add GEMINI_API_KEY')`,
-          [imageBase64]
-        );
-      }
-
-      res.json({ ok: true, bytes: req.body.length });
-    } catch (err) {
-      console.error('[CAMERA PHOTO]', err.message);
-      res.status(500).json({ error: err.message });
-    }
+// ─── Camera: receive a frame push from ESP32-CAM ──────────────────
+// Stores JPEG in camera_frames rolling buffer (max 500 frames).
+// Also accepts /camera/photo for backward compatibility.
+async function handleFrameUpload(req, res) {
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+    return res.status(400).json({ error: 'No image data — send raw JPEG with Content-Type: image/jpeg' });
   }
-);
+  try {
+    const imageBase64 = req.body.toString('base64');
+    await pool.query('INSERT INTO camera_frames (image_b64) VALUES ($1)', [imageBase64]);
+    // Prune: keep last 500 frames
+    pool.query(
+      `DELETE FROM camera_frames WHERE id NOT IN (
+         SELECT id FROM camera_frames ORDER BY created_at DESC LIMIT 500
+       )`
+    ).catch(() => {});
+    res.json({ ok: true, bytes: req.body.length });
+  } catch (err) {
+    console.error('[CAMERA FRAME]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+app.post('/camera/frame', express.raw({ type: 'image/jpeg', limit: '2mb' }), handleFrameUpload);
+app.post('/camera/photo', express.raw({ type: 'image/jpeg', limit: '2mb' }), handleFrameUpload);
 
 // ─── Camera: get registered IP ─────────────────────────────────────
 app.get('/api/camera/ip', async (req, res) => {
@@ -2131,18 +2147,55 @@ app.get('/api/camera/ip', async (req, res) => {
   }
 });
 
-// ─── Camera: latest captured photo (base64) ────────────────────────
+// ─── Camera: latest frame (with image) ────────────────────────────
+app.get('/api/camera/frames/latest', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, image_b64, created_at FROM camera_frames ORDER BY created_at DESC LIMIT 1'
+    );
+    if (!rows.length) return res.json({ frame: null });
+    res.json({ id: rows[0].id, image: rows[0].image_b64, created_at: rows[0].created_at });
+  } catch (err) {
+    res.status(500).json({ frame: null, error: err.message });
+  }
+});
+
+// ─── Camera: frame list for timeline (id + timestamp only) ─────────
+app.get('/api/camera/frames', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, created_at FROM camera_frames ORDER BY created_at ASC'
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json([]);
+  }
+});
+
+// ─── Camera: specific frame by id ─────────────────────────────────
+app.get('/api/camera/frames/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, image_b64, created_at FROM camera_frames WHERE id = $1',
+      [parseInt(req.params.id, 10)]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Frame not found' });
+    res.json({ id: rows[0].id, image: rows[0].image_b64, created_at: rows[0].created_at });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Legacy alias kept for any old code
 app.get('/api/camera/latest', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT image_b64, created_at
-       FROM plant_diagnoses WHERE image_b64 IS NOT NULL
-       ORDER BY created_at DESC LIMIT 1`
+      'SELECT id, image_b64, created_at FROM camera_frames ORDER BY created_at DESC LIMIT 1'
     );
     if (!rows.length) return res.json({ photo: null });
     res.json({ photo: rows[0].image_b64, captured_at: rows[0].created_at });
   } catch (err) {
-    res.status(500).json({ photo: null, error: err.message });
+    res.status(500).json({ photo: null });
   }
 });
 
@@ -2160,17 +2213,17 @@ app.get('/api/diagnoses', async (req, res) => {
   }
 });
 
-// ─── Camera: re-run AI diagnosis on latest stored photo ───────────
+// ─── Camera: re-run AI diagnosis on latest stored frame ───────────
 app.post('/api/diagnoses/run', async (req, res) => {
   if (!process.env.GEMINI_API_KEY) {
     return res.status(503).json({ error: 'Gemini API not configured — add GEMINI_API_KEY' });
   }
   try {
     const { rows } = await pool.query(
-      `SELECT image_b64 FROM plant_diagnoses WHERE image_b64 IS NOT NULL ORDER BY created_at DESC LIMIT 1`
+      'SELECT image_b64 FROM camera_frames ORDER BY created_at DESC LIMIT 1'
     );
-    if (!rows.length || !rows[0].image_b64) {
-      return res.status(404).json({ error: 'No photo stored yet — wait for the camera to send one' });
+    if (!rows.length) {
+      return res.status(404).json({ error: 'No frames stored yet — wait for the camera to send one' });
     }
     const result = await diagnosePlant(rows[0].image_b64);
     res.json(result);
@@ -2203,6 +2256,11 @@ initDB()
       // Daily report auto-generate every 24 hours
       const REPORT_INTERVAL_MS = 24 * 60 * 60 * 1000;
       setInterval(() => generateDailyReport().catch(e => console.error('[REPORT auto]', e.message)), REPORT_INTERVAL_MS);
+
+      // Hourly visual plant diagnosis from camera frames
+      const VISION_INTERVAL_MS = 60 * 60 * 1000;
+      setInterval(() => diagnosePlantFromLatestFrame().catch(e => console.error('[VISION auto]', e.message)), VISION_INTERVAL_MS);
+      setTimeout(() => diagnosePlantFromLatestFrame().catch(() => {}), 30_000); // first run 30s after boot
     });
   })
   .catch(err => {

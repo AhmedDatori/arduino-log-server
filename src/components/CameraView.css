@@ -2,18 +2,61 @@
    CAMERA VIEW
    ───────────────────────────────────────────────────────────────────────────── */
 
-/* ── Live stream card ────────────────────────────────────────────── */
-.cam-stream-card {
+/* ── Frame viewer card ───────────────────────────────────────────── */
+.cam-viewer-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   overflow: hidden;
   margin-bottom: 2rem;
-  transition: border-color .25s;
 }
-.cam-stream-card:hover { border-color: var(--text-dim); }
 
-.cam-stream-wrap {
+/* header bar */
+.cam-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .7rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  gap: 1rem;
+}
+
+.cam-status-wrap {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+.cam-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.cam-dot--online  { background: #3dffa0; box-shadow: 0 0 6px #3dffa0; animation: pulse-green 2s infinite; }
+.cam-dot--offline { background: #4a6080; }
+
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: .4; }
+}
+
+.cam-status-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.cam-frame-time {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* image area */
+.cam-img-wrap {
   width: 100%;
   background: #000;
   min-height: 200px;
@@ -22,105 +65,102 @@
   justify-content: center;
 }
 
-.cam-stream {
+.cam-main-img {
   width: 100%;
   max-width: 640px;
   display: block;
   margin: 0 auto;
 }
 
-/* offline / no-device states */
-.cam-stream-offline,
-.cam-no-device {
-  padding: 3rem 2rem;
-  text-align: center;
+/* no-frame placeholder */
+.cam-no-frame {
+  padding: 3.5rem 2rem;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1rem;
-  width: 100%;
+  gap: .85rem;
+  text-align: center;
 }
-
-.cam-offline-icon {
-  font-size: 3.5rem;
-  opacity: .4;
-}
-
-.cam-offline-msg {
-  font-size: 14px;
-  color: var(--text-dim);
-  display: flex;
-  flex-direction: column;
-  gap: .25rem;
-}
-.cam-offline-hint {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.cam-open-link {
-  font-size: 12px;
-  color: var(--accent);
-  text-decoration: none;
-  border: 1px solid rgba(61,255,160,.3);
-  border-radius: var(--radius-sm);
-  padding: .4rem 1rem;
-}
-.cam-open-link:hover { background: rgba(61,255,160,.08); }
-
-.cam-no-device-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text);
-}
-.cam-no-device-sub {
-  font-size: 12px;
-  color: var(--text-dim);
-  max-width: 360px;
-}
-.cam-no-device-sub code {
-  color: var(--accent);
+.cam-no-frame-icon  { font-size: 3.5rem; opacity: .35; }
+.cam-no-frame-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.cam-no-frame-sub   { font-size: 12px; color: var(--text-dim); max-width: 340px; }
+.cam-no-frame-sub code {
   font-family: var(--mono);
   font-size: 11px;
+  color: var(--accent);
 }
 
-/* footer bar under stream */
-.cam-stream-footer {
+/* ── Timeline ────────────────────────────────────────────────────── */
+.cam-timeline {
+  padding: .85rem 1.25rem 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.cam-timeline-labels {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: .4rem;
+}
+
+.cam-tl-selected {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+.cam-timeline-row {
+  width: 100%;
+  margin-bottom: .5rem;
+}
+
+.cam-timeline-slider {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+  height: 4px;
+}
+
+.cam-timeline-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: .75rem 1.25rem;
-  border-top: 1px solid var(--border);
-  flex-wrap: wrap;
-  gap: .5rem;
 }
 
-.cam-ip-badge {
+.cam-frame-count {
+  font-size: 10px;
+  color: var(--text-muted);
   font-family: var(--mono);
-  font-size: 12px;
-  color: var(--accent);
+}
+
+.cam-live-btn {
   background: rgba(61,255,160,.06);
   border: 1px solid rgba(61,255,160,.2);
-  border-radius: var(--radius-sm);
-  padding: .2rem .7rem;
-}
-.cam-ip-seen {
+  border-radius: 99px;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  padding: .3rem .9rem;
+  cursor: pointer;
+  transition: background .2s, color .2s, border-color .2s;
+}
+.cam-live-btn--active {
+  color: var(--accent);
+  border-color: rgba(61,255,160,.4);
+  background: rgba(61,255,160,.1);
+  cursor: default;
+}
+.cam-live-btn:not(.cam-live-btn--active):hover {
+  background: rgba(61,255,160,.12);
+  color: var(--text);
+  border-color: rgba(61,255,160,.4);
 }
 
-.cam-stream-links {
-  display: flex;
-  gap: 1rem;
-}
-.cam-stream-links a {
-  font-size: 12px;
-  color: var(--text-dim);
-  text-decoration: none;
-}
-.cam-stream-links a:hover { color: var(--text); }
-
-/* ── AI Vision section header ────────────────────────────────────── */
+/* ── AI Vision header ────────────────────────────────────────────── */
 .cam-ai-header {
   display: flex;
   align-items: flex-end;
@@ -135,17 +175,13 @@
   gap: 1rem;
   flex-wrap: wrap;
 }
-.cam-ai-meta > span {
-  font-size: 12px;
-  color: var(--text-dim);
-}
+.cam-ai-meta > span { font-size: 12px; color: var(--text-dim); }
 
 .cam-run-wrap {
   display: flex;
   align-items: center;
   gap: .75rem;
 }
-
 .cam-run-btn {
   background: rgba(61,255,160,.08);
   border: 1px solid rgba(61,255,160,.3);
@@ -158,42 +194,9 @@
   cursor: pointer;
   transition: background .2s, border-color .2s, opacity .2s;
 }
-.cam-run-btn:hover:not(:disabled) {
-  background: rgba(61,255,160,.16);
-  border-color: rgba(61,255,160,.5);
-}
+.cam-run-btn:hover:not(:disabled) { background: rgba(61,255,160,.16); border-color: rgba(61,255,160,.5); }
 .cam-run-btn:disabled { opacity: .4; cursor: not-allowed; }
-
-.cam-run-msg {
-  font-size: 11px;
-  color: var(--text-dim);
-}
-
-/* ── Latest captured photo ───────────────────────────────────────── */
-.cam-latest-photo {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  margin-bottom: 1.5rem;
-}
-
-.cam-latest-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  padding: .75rem 1.25rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.cam-photo-img {
-  width: 100%;
-  max-width: 640px;
-  display: block;
-  margin: 0 auto;
-}
+.cam-run-msg { font-size: 11px; color: var(--text-dim); }
 
 /* ── Diagnosis cards ─────────────────────────────────────────────── */
 .diag-card {
@@ -205,7 +208,6 @@
   transition: border-color .25s;
 }
 .diag-card:hover { border-color: var(--text-dim); }
-
 .diag-card--latest {
   border-color: rgba(61,255,160,.25);
   background: linear-gradient(135deg, var(--bg-card) 0%, rgba(61,255,160,.025) 100%);
@@ -260,7 +262,6 @@
   margin: 0 0 1rem;
 }
 
-/* alerts row */
 .diag-alerts { margin-bottom: .9rem; }
 .diag-alert {
   background: rgba(255,77,109,.08);
@@ -272,10 +273,7 @@
   margin-bottom: .4rem;
 }
 
-/* generic section */
-.diag-section {
-  margin-bottom: .9rem;
-}
+.diag-section { margin-bottom: .9rem; }
 .diag-section-title {
   font-size: 10px;
   font-weight: 800;
@@ -285,7 +283,6 @@
   margin-bottom: .5rem;
 }
 
-/* issues */
 .diag-issue {
   display: flex;
   gap: .6rem;
@@ -300,20 +297,12 @@
 .diag-issue--medium { background: rgba(245,165,36,.07); }
 .diag-issue--high   { background: rgba(255,77,109,.08); }
 
-.diag-issue-name {
-  font-weight: 700;
-  color: var(--text);
-  white-space: nowrap;
-}
+.diag-issue-name { font-weight: 700; color: var(--text); white-space: nowrap; }
 .diag-issue--low    .diag-issue-name { color: #3dffa0; }
 .diag-issue--medium .diag-issue-name { color: #f5a524; }
 .diag-issue--high   .diag-issue-name { color: #ff4d6d; }
+.diag-issue-desc { color: var(--text-dim); }
 
-.diag-issue-desc {
-  color: var(--text-dim);
-}
-
-/* recommendations */
 .diag-recs {
   margin: 0;
   padding: 0 0 0 1.2em;
@@ -322,7 +311,6 @@
   line-height: 1.7;
 }
 
-/* plant suggestion */
 .diag-plant-suggest {
   background: rgba(61,255,160,.06);
   border: 1px solid rgba(61,255,160,.18);
@@ -334,9 +322,8 @@
 }
 .diag-plant-suggest strong { color: var(--text); }
 
-/* ── Loading / empty states ──────────────────────────────────────── */
-.cam-loading,
-.cam-empty {
+/* ── Loading / empty ─────────────────────────────────────────────── */
+.cam-loading, .cam-empty {
   text-align: center;
   color: var(--text-muted);
   font-size: 13px;
