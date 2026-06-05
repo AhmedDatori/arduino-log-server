@@ -3,6 +3,7 @@ import Header           from './components/Header';
 import DeviceBar        from './components/DeviceBar';
 import StatusView       from './components/StatusView';
 import HistoryView      from './components/HistoryView';
+import CameraView       from './components/CameraView';
 import ReportsView      from './components/ReportsView';
 import PlantsView       from './components/PlantsView';
 import ChatView         from './components/ChatView';
@@ -78,6 +79,9 @@ export default function App() {
         )}
         {tab === 'history' && (
           <HistoryView logs={logs} onLogsCleared={refresh} />
+        )}
+        {tab === 'camera' && (
+          <CameraView />
         )}
         {tab === 'reports' && (
           <ReportsView />

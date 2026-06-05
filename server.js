@@ -109,6 +109,52 @@ async function callGeminiJSON(userText, options = {}) {
   return JSON.parse(match[0]);
 }
 
+/**
+ * Multimodal Gemini call: sends a text prompt + a JPEG image (base64).
+ * Returns parsed JSON from the response.
+ */
+async function callGeminiVision(textPrompt, imageBase64, options = {}) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+
+  const body = {
+    contents: [{
+      role: 'user',
+      parts: [
+        { text: textPrompt },
+        { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
+      ],
+    }],
+    generationConfig: {
+      maxOutputTokens: options.maxOutputTokens || 600,
+      temperature:     options.temperature     || 0.2,
+    },
+  };
+
+  const res  = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+  );
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = data?.error?.message || `HTTP ${res.status}`;
+    throw Object.assign(new Error(`Gemini Vision: ${msg}`), { geminiError: true });
+  }
+
+  const u = data?.usageMetadata;
+  if (u) {
+    pool.query(
+      'INSERT INTO token_usage (endpoint, prompt_tokens, output_tokens, total_tokens) VALUES ($1,$2,$3,$4)',
+      ['plant-vision', u.promptTokenCount ?? 0, u.candidatesTokenCount ?? 0, u.totalTokenCount ?? 0]
+    ).catch(e => console.error('[TOKEN_LOG]', e.message));
+  }
+
+  const text  = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error(`Gemini Vision returned no JSON. Got: ${text.slice(0, 200)}`);
+  return JSON.parse(match[0]);
+}
+
 // ─── Trend helper (linear regression slope) ───────────────────────
 // Returns change-per-reading (negative = falling, positive = rising)
 function computeTrend(values) {
@@ -567,6 +613,32 @@ async function initDB() {
     )
   `);
 
+  // Camera IP registry
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS camera_state (
+      id        INT         PRIMARY KEY DEFAULT 1,
+      ip        TEXT,
+      last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`INSERT INTO camera_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+
+  // Visual plant diagnoses from Gemini Vision
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS plant_diagnoses (
+      id               SERIAL      PRIMARY KEY,
+      image_b64        TEXT,
+      health_score     INT,
+      status           TEXT        NOT NULL DEFAULT 'unknown',
+      summary          TEXT,
+      issues           JSONB       NOT NULL DEFAULT '[]',
+      recommendations  JSONB       NOT NULL DEFAULT '[]',
+      alerts           JSONB       NOT NULL DEFAULT '[]',
+      plant_suggested  TEXT,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
   // Seed preset plants only if none exist yet
   const { rows: presetCheck } = await pool.query(
     'SELECT COUNT(*) FROM plant_profiles WHERE is_preset = TRUE'
@@ -586,6 +658,74 @@ async function initDB() {
   }
 
   console.log('[DB] All tables ready');
+}
+
+// ─── Visual Plant Diagnosis ───────────────────────────────────────
+async function diagnosePlant(imageBase64) {
+  const plant    = await getActivePlant();
+  const plantCtx = plant
+    ? `The currently active plant type is: ${plant.emoji} ${plant.name}.\nIdeal conditions — Soil: ${plant.soil_min}–${plant.soil_max}%, Temp: ${plant.temp_min}–${plant.temp_max}°C, Humidity: ${plant.hum_min}–${plant.hum_max}%, Light: ${plant.light_min}–${plant.light_max}%.`
+    : 'No plant type is configured in the system.';
+
+  const prompt = `You are an expert plant health diagnostician analysing a photo taken by a greenhouse camera.
+
+${plantCtx}
+
+Examine the plant(s) visible in the image. Assess leaf colour, texture, posture, signs of disease or pest damage, soil surface, and any other visible indicators.
+
+Respond ONLY with valid JSON, no markdown:
+{
+  "health_score": <integer 0-100, 100 = perfect health>,
+  "status": "<'healthy'|'fair'|'stressed'|'critical'>",
+  "summary": "<2-3 sentences describing overall appearance and health>",
+  "issues": [
+    { "issue": "<short name>", "severity": "<'low'|'medium'|'high'>", "description": "<what you observe>" }
+  ],
+  "recommendations": ["<specific action 1>", "<specific action 2>"],
+  "alerts": ["<urgent alert text, only if critical issue found — omit array entry otherwise>"],
+  "plant_suggested": "<if you can identify the plant species and it differs from the current type, give the common name; otherwise null>"
+}`;
+
+  const result = await callGeminiVision(prompt, imageBase64, { maxOutputTokens: 700, temperature: 0.2 });
+
+  // Normalise
+  result.health_score   = Math.max(0, Math.min(100, Number(result.health_score) || 50));
+  result.issues         = Array.isArray(result.issues)         ? result.issues         : [];
+  result.recommendations= Array.isArray(result.recommendations)? result.recommendations: [];
+  result.alerts         = Array.isArray(result.alerts)         ? result.alerts.filter(Boolean) : [];
+
+  await pool.query(
+    `INSERT INTO plant_diagnoses
+       (image_b64, health_score, status, summary, issues, recommendations, alerts, plant_suggested)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      imageBase64,
+      result.health_score,
+      result.status   || 'unknown',
+      result.summary  || '',
+      JSON.stringify(result.issues),
+      JSON.stringify(result.recommendations),
+      JSON.stringify(result.alerts),
+      result.plant_suggested || null,
+    ]
+  );
+
+  // Notifications for visual alerts
+  for (const alert of result.alerts) {
+    await pool.query(
+      'INSERT INTO notifications (type, message, severity) VALUES ($1,$2,$3)',
+      ['camera-visual', `[Camera AI] ${alert}`, 'warning']
+    ).catch(() => {});
+  }
+  if (result.health_score < 40) {
+    await pool.query(
+      'INSERT INTO notifications (type, message, severity) VALUES ($1,$2,$3)',
+      ['camera-health', `Visual plant health critical: ${result.health_score}/100 — ${result.summary}`, 'danger']
+    ).catch(() => {});
+  }
+
+  console.log(`[VISION] Diagnosis: ${result.status} (${result.health_score}/100)`);
+  return result;
 }
 
 // ─── AI Health Score ───────────────────────────────────────────────
@@ -699,9 +839,25 @@ async function generateDailyReport() {
     ? `Plant type: ${plant.emoji} ${plant.name}\nIdeal ranges — Soil: ${plant.soil_min}–${plant.soil_max}%, Temp: ${plant.temp_min}–${plant.temp_max}°C, Humidity: ${plant.hum_min}–${plant.hum_max}%, Light: ${plant.light_min}–${plant.light_max}%\n\n`
     : '';
 
+  // Include latest visual diagnosis if one was taken in the last 24 hours
+  let visualCtx = '';
+  try {
+    const { rows: vRows } = await pool.query(
+      `SELECT health_score, status, summary, issues, recommendations
+       FROM plant_diagnoses WHERE created_at >= $1 ORDER BY created_at DESC LIMIT 1`,
+      [start]
+    );
+    if (vRows.length) {
+      const v = vRows[0];
+      const issueStr = (v.issues || []).map(i => `${i.issue} (${i.severity})`).join(', ');
+      visualCtx = `\nVisual AI camera diagnosis: ${v.status} health score ${v.health_score}/100.
+${v.summary}${issueStr ? `\nVisually detected issues: ${issueStr}.` : ''}\n`;
+    }
+  } catch (_) {}
+
   const prompt = `You are writing a daily greenhouse report for a plant owner.
 
-${plantCtx}Data from the last 24 hours (${d.readings} readings):
+${plantCtx}${visualCtx}Data from the last 24 hours (${d.readings} readings):
 - Soil moisture:  avg ${d.avg_soil}%,  min ${d.min_soil}%,  max ${d.max_soil}%
 - Water level:    avg ${d.avg_water} raw (0-1023; <200=empty,<500=low,<800=medium,≥800=full), min ${d.min_water}, max ${d.max_water}
 - Light:          avg ${d.avg_light}%, min ${d.min_light}%, max ${d.max_light}%
@@ -1915,6 +2071,114 @@ Return ONLY valid JSON (no markdown):
 });
 
 app.post('/api/hardware/refresh', (_req, res) => { hwCache.at = 0; res.json({ ok: true }); });
+
+// ─── Camera: register IP ────────────────────────────────────────────
+app.post('/camera/register', async (req, res) => {
+  const { ip } = req.body;
+  if (!ip) return res.status(400).json({ error: 'ip required' });
+  try {
+    await pool.query(
+      `INSERT INTO camera_state (id, ip, last_seen) VALUES (1, $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET ip = $1, last_seen = NOW()`,
+      [ip]
+    );
+    console.log(`[CAMERA] Registered IP: ${ip}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[CAMERA REGISTER]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Camera: receive JPEG upload + trigger AI diagnosis ────────────
+app.post('/camera/photo',
+  express.raw({ type: 'image/jpeg', limit: '2mb' }),
+  async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'No image data — send raw JPEG with Content-Type: image/jpeg' });
+    }
+    try {
+      const imageBase64 = req.body.toString('base64');
+      console.log(`[CAMERA] Photo received — ${req.body.length} bytes`);
+
+      if (process.env.GEMINI_API_KEY) {
+        // Run asynchronously so we don't block the ESP32 waiting for Gemini
+        diagnosePlant(imageBase64).catch(e => console.error('[VISION async]', e.message));
+      } else {
+        // Store photo without AI so the latest photo endpoint works
+        await pool.query(
+          `INSERT INTO plant_diagnoses (image_b64, status, summary) VALUES ($1, 'unknown', 'AI not configured — add GEMINI_API_KEY')`,
+          [imageBase64]
+        );
+      }
+
+      res.json({ ok: true, bytes: req.body.length });
+    } catch (err) {
+      console.error('[CAMERA PHOTO]', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ─── Camera: get registered IP ─────────────────────────────────────
+app.get('/api/camera/ip', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT ip, last_seen FROM camera_state WHERE id = 1');
+    if (!rows.length || !rows[0].ip) return res.json({ ip: null });
+    res.json({ ip: rows[0].ip, last_seen: rows[0].last_seen });
+  } catch (err) {
+    res.status(500).json({ ip: null, error: err.message });
+  }
+});
+
+// ─── Camera: latest captured photo (base64) ────────────────────────
+app.get('/api/camera/latest', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT image_b64, created_at
+       FROM plant_diagnoses WHERE image_b64 IS NOT NULL
+       ORDER BY created_at DESC LIMIT 1`
+    );
+    if (!rows.length) return res.json({ photo: null });
+    res.json({ photo: rows[0].image_b64, captured_at: rows[0].created_at });
+  } catch (err) {
+    res.status(500).json({ photo: null, error: err.message });
+  }
+});
+
+// ─── Camera: list plant diagnoses ──────────────────────────────────
+app.get('/api/diagnoses', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, health_score, status, summary, issues, recommendations, alerts, plant_suggested, created_at
+       FROM plant_diagnoses ORDER BY created_at DESC LIMIT 20`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[GET /api/diagnoses]', err.message);
+    res.status(500).json([]);
+  }
+});
+
+// ─── Camera: re-run AI diagnosis on latest stored photo ───────────
+app.post('/api/diagnoses/run', async (req, res) => {
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(503).json({ error: 'Gemini API not configured — add GEMINI_API_KEY' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT image_b64 FROM plant_diagnoses WHERE image_b64 IS NOT NULL ORDER BY created_at DESC LIMIT 1`
+    );
+    if (!rows.length || !rows[0].image_b64) {
+      return res.status(404).json({ error: 'No photo stored yet — wait for the camera to send one' });
+    }
+    const result = await diagnosePlant(rows[0].image_b64);
+    res.json(result);
+  } catch (err) {
+    console.error('[DIAGNOSES RUN]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─── Serve React app (catch-all) ───────────────────────────────────
 app.get('*', (req, res) => {

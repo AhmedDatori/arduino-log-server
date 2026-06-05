@@ -120,6 +120,12 @@ export const setLedColor = (r, g, b) => request('/api/led-color', {
 export const fetchFusion      = ()  => request('/api/sensor-fusion');
 export const refreshFusion    = ()  => request('/api/sensor-fusion/refresh', { method: 'POST' });
 
+// ─── Camera & Plant Vision ─────────────────────────────────────────
+export const fetchCameraIp    = ()  => request('/api/camera/ip');
+export const fetchLatestPhoto = ()  => request('/api/camera/latest');
+export const fetchDiagnoses   = ()  => request('/api/diagnoses');
+export const runDiagnosis     = ()  => request('/api/diagnoses/run', { method: 'POST' });
+
 // ─── AI Experiment Suggestions ─────────────────────────────────────
 export const fetchExperimentSuggestions  = ()  => request('/api/experiments/suggest');
 export const refreshExperimentSuggestions= ()  => request('/api/experiments/suggest/refresh', { method: 'POST' });
