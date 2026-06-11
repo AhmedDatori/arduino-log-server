@@ -1,29 +1,30 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import Header           from './components/Header';
-import DeviceBar        from './components/DeviceBar';
-import StatusView       from './components/StatusView';
-import HistoryView      from './components/HistoryView';
-import CameraView       from './components/CameraView';
-import ReportsView      from './components/ReportsView';
-import PlantsView       from './components/PlantsView';
-import ChatView         from './components/ChatView';
-import AlertsView       from './components/AlertsView';
-import LabView          from './components/LabView';
-import UsageView        from './components/UsageView';
-import { fetchLogs, fetchState, fetchNotifications, fetchPlants, fetchMode } from './api';
+import React, { useCallback, useEffect, useState } from 'react';
+import Header from './components/Header';
+import DeviceBar from './components/DeviceBar';
+import StatusView from './views/StatusView';
+import HistoryView from './views/HistoryView';
+import CameraView from './views/CameraView';
+import ReportsView from './views/ReportsView';
+import PlantsView from './views/PlantsView';
+import ChatView from './views/ChatView';
+import AlertsView from './views/AlertsView';
+import LabView from './views/LabView';
+import UsageView from './views/UsageView';
+import { DEFAULT_SECTION } from './appSections';
+import { fetchLogs, fetchMode, fetchNotifications, fetchPlants, fetchState } from './api';
 
 const REFRESH_MS = 5_000;
 
 export default function App() {
-  const [tab,     setTab]     = useState('status');
-  const [logs,    setLogs]    = useState([]);
-  const [state,   setState]   = useState({ light: false, pump: false, buzzer: false, fan: false });
-  const [alerts,  setAlerts]  = useState([]);
-  const [plant,   setPlant]   = useState(null);
-  const [mode,    setMode]    = useState('manual');
+  const [activeSection, setActiveSection] = useState(DEFAULT_SECTION);
+  const [logs, setLogs] = useState([]);
+  const [state, setState] = useState({ light: false, pump: false, buzzer: false, fan: false });
+  const [alerts, setAlerts] = useState([]);
+  const [plant, setPlant] = useState(null);
+  const [mode, setMode] = useState('manual');
   const [loading, setLoading] = useState(true);
 
-  const refresh = useCallback(async () => {
+  const refreshDashboard = useCallback(async () => {
     try {
       const [logsData, stateData, alertsData, plantsData, modeData] = await Promise.all([
         fetchLogs(),
@@ -32,76 +33,74 @@ export default function App() {
         fetchPlants(),
         fetchMode().catch(() => ({ mode: 'manual' })),
       ]);
+
       setLogs(logsData);
       setState(stateData);
       setAlerts(alertsData);
-      setPlant(plantsData.find(p => p.is_active) ?? null);
+      setPlant(plantsData.find(item => item.is_active) ?? null);
       setMode(modeData.mode ?? 'manual');
     } catch (err) {
-      console.error('Refresh error:', err.message);
+      console.error('Dashboard refresh failed:', err.message);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    refresh();
-    const interval = setInterval(refresh, REFRESH_MS);
+    refreshDashboard();
+    const interval = setInterval(refreshDashboard, REFRESH_MS);
     return () => clearInterval(interval);
-  }, [refresh]);
+  }, [refreshDashboard]);
 
-  const latest      = logs[0] ?? null;
-  const unreadCount = alerts.filter(a => !a.acknowledged).length;
+  const latestLog = logs[0] ?? null;
+  const unreadAlertCount = alerts.filter(alert => !alert.acknowledged).length;
+
+  function renderActiveSection() {
+    if (activeSection === 'status') {
+      return (
+        <StatusView
+          latest={latestLog}
+          state={state}
+          plant={plant}
+          onStateChange={setState}
+          loading={loading}
+          mode={mode}
+          onModeChange={setMode}
+        />
+      );
+    }
+
+    if (activeSection === 'history') {
+      return <HistoryView logs={logs} onLogsCleared={refreshDashboard} />;
+    }
+
+    if (activeSection === 'camera') return <CameraView />;
+    if (activeSection === 'reports') return <ReportsView />;
+    if (activeSection === 'plants') return <PlantsView />;
+    if (activeSection === 'chat') return <ChatView />;
+
+    if (activeSection === 'alerts') {
+      return <AlertsView alerts={alerts} onAlertsChanged={refreshDashboard} />;
+    }
+
+    if (activeSection === 'lab') return <LabView />;
+    if (activeSection === 'usage') return <UsageView />;
+
+    return null;
+  }
 
   return (
     <div className="app">
       <Header
-        tab={tab}
-        onTabChange={setTab}
-        onRefresh={refresh}
-        unreadCount={unreadCount}
+        tab={activeSection}
+        onTabChange={setActiveSection}
+        onRefresh={refreshDashboard}
+        unreadCount={unreadAlertCount}
       />
 
-      <DeviceBar latest={latest} total={logs.length} plant={plant} />
+      <DeviceBar latest={latestLog} total={logs.length} plant={plant} />
 
-      <main>
-        {tab === 'status' && (
-          <StatusView
-            latest={latest}
-            state={state}
-            plant={plant}
-            onStateChange={setState}
-            onLogsCleared={refresh}
-            loading={loading}
-            mode={mode}
-            onModeChange={setMode}
-          />
-        )}
-        {tab === 'history' && (
-          <HistoryView logs={logs} onLogsCleared={refresh} />
-        )}
-        {tab === 'camera' && (
-          <CameraView />
-        )}
-        {tab === 'reports' && (
-          <ReportsView />
-        )}
-        {tab === 'plants' && (
-          <PlantsView />
-        )}
-        {tab === 'chat' && (
-          <ChatView />
-        )}
-        {tab === 'alerts' && (
-          <AlertsView alerts={alerts} onAlertsChanged={refresh} />
-        )}
-        {tab === 'lab' && (
-          <LabView />
-        )}
-        {tab === 'usage' && (
-          <UsageView />
-        )}
-      </main>
+      <main>{renderActiveSection()}</main>
     </div>
   );
 }

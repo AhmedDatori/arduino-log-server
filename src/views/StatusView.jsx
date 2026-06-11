@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { GaugeCard, BigCard } from './SensorCard';
-import ControlCard from './ControlCard';
-import HealthScore from './HealthScore';
-import ModeSelector from './ModeSelector';
-import AutopilotStatus from './AutopilotStatus';
-import PredictionCard from './PredictionCard';
-import SensorFusionCard from './SensorFusionCard';
+import { GaugeCard, BigCard } from '../components/SensorCard';
+import ControlCard from '../components/ControlCard';
+import HealthScore from '../components/HealthScore';
+import ModeSelector from '../components/ModeSelector';
+import AutopilotStatus from '../components/AutopilotStatus';
+import PredictionCard from '../components/PredictionCard';
+import SensorFusionCard from '../components/SensorFusionCard';
 import { waterInfo, soilInfo, lightInfo, tempInfo, humInfo } from '../utils';
 import { setLedColor } from '../api';
 import './StatusView.css';

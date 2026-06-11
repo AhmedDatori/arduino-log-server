@@ -5,7 +5,7 @@ import {
   fetchPlantModel, refreshPlantModel,
   fetchExperimentSuggestions, refreshExperimentSuggestions,
 } from '../api';
-import HardwarePanel from './HardwarePanel';
+import HardwarePanel from '../components/HardwarePanel';
 import './LabView.css';
 
 // ══════════════════════════════════════════════════════════════════════════════

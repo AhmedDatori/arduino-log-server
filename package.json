@@ -1,13 +1,14 @@
 {
-  "name": "plant-monitor",
+  "name": "smart-green-house",
   "version": "2.0.0",
-  "description": "Arduino IoT plant monitoring dashboard",
+  "description": "Smart Green House ESP32 monitoring and control dashboard",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev:server": "node server.js",
     "dev:client": "vite",
     "build": "vite build",
+    "check:backend": "node scripts/check-backend.js",
     "preview": "vite preview"
   },
   "dependencies": {
