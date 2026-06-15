@@ -45,7 +45,7 @@ function StatusBadge({ label, color }) {
 }
 
 // ─── Gauge-style card (water, soil, light) ─────────────────────────
-export function GaugeCard({ icon, label, displayValue, pct, info }) {
+export function GaugeCard({ icon, label, displayValue, pct, info, centerClassName = '' }) {
   return (
     <div className="sensor-card" style={{ '--accent': info.color }}>
       <div className="card-icon">{icon}</div>
@@ -53,7 +53,7 @@ export function GaugeCard({ icon, label, displayValue, pct, info }) {
       <div className="gauge-wrap">
         <Gauge pct={pct} color={info.color} />
         <div className="gauge-center">
-          <span className="gauge-val" style={{ color: info.color }}>
+          <span className={`gauge-val ${centerClassName}`} style={{ color: info.color }}>
             {displayValue ?? '—'}
           </span>
         </div>

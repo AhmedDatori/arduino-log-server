@@ -66,6 +66,15 @@
   font-size: .95rem;
   font-weight: 700;
 }
+.gauge-val-status {
+  max-width: 72px;
+  font-family: var(--sans);
+  font-size: .68rem;
+  line-height: 1.15;
+  text-align: center;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
 
 /* ── Big number (temp / humidity) ─────────────────────────────────────────── */
 .bignum-wrap {

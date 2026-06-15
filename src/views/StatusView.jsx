@@ -80,6 +80,11 @@ export default function StatusView({ latest, state, plant, onStateChange, loadin
   const h = latest?.hum   ?? null;
 
   const autoControlled = mode !== 'manual';
+  const waterStatus = w === null || w === undefined
+    ? null
+    : w <= 200
+      ? 'No water please fill the tank'
+      : 'There is water';
 
   return (
     <div className="view-wrap">
@@ -121,9 +126,14 @@ export default function StatusView({ latest, state, plant, onStateChange, loadin
       <div className="sensor-grid">
         <GaugeCard
           icon="💧" label="Water Level"
-          displayValue={w !== null ? String(w) : null}
-          pct={waterInfo(w).pct}
-          info={waterInfo(w)}
+          displayValue={waterStatus}
+          pct={w !== null && w !== undefined && w > 200 ? 100 : 0}
+          info={w !== null && w !== undefined && w <= 200
+            ? { label: 'NO WATER', color: '#ff4d6d' }
+            : w !== null && w !== undefined
+              ? { label: 'HAS WATER', color: '#3dffa0' }
+              : waterInfo(w)}
+          centerClassName="gauge-val-status"
         />
         <GaugeCard
           icon="🌿" label="Soil Moisture"
