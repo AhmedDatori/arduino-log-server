@@ -110,12 +110,6 @@ export const clearTokenUsage  = () => request('/api/token-usage', { method: 'DEL
 export const fetchHardware    = ()  => request('/api/hardware');
 export const refreshHardware  = ()  => request('/api/hardware/refresh', { method: 'POST' });
 
-// ─── LED Color ─────────────────────────────────────────────────────
-export const setLedColor = (r, g, b) => request('/api/led-color', {
-  method: 'POST',
-  body: formBody({ r, g, b }),
-});
-
 // ─── Sensor Fusion ─────────────────────────────────────────────────
 export const fetchFusion      = ()  => request('/api/sensor-fusion');
 export const refreshFusion    = ()  => request('/api/sensor-fusion/refresh', { method: 'POST' });

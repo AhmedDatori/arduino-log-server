@@ -2,7 +2,7 @@
 
 Views are full pages in the Smart Green House dashboard.
 
-- `StatusView.jsx` is the main live dashboard with sensors, controls, health score, autopilot, forecast, and LED color.
+- `StatusView.jsx` is the main live dashboard with sensors, controls, health score, autopilot, and forecast.
 - `HistoryView.jsx` shows recent sensor logs.
 - `CameraView.jsx` shows ESP32-CAM frames and visual plant diagnoses.
 - `ReportsView.jsx` shows daily AI reports.

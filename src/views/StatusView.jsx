@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { GaugeCard, BigCard } from '../components/SensorCard';
 import ControlCard from '../components/ControlCard';
 import HealthScore from '../components/HealthScore';
@@ -7,7 +7,6 @@ import AutopilotStatus from '../components/AutopilotStatus';
 import PredictionCard from '../components/PredictionCard';
 import SensorFusionCard from '../components/SensorFusionCard';
 import { waterInfo, soilInfo, lightInfo, tempInfo, humInfo } from '../utils';
-import { setLedColor } from '../api';
 import './StatusView.css';
 
 // ── Plant vs sensor comparison ────────────────────────────────────
@@ -71,78 +70,6 @@ function PlantStatusBar({ latest, plant }) {
   );
 }
 
-function rgbToHex(r, g, b) {
-  return '#' + [r, g, b].map(v => Math.max(0, Math.min(255, v ?? 0)).toString(16).padStart(2, '0')).join('');
-}
-function hexToRgb(hex) {
-  return {
-    r: parseInt(hex.slice(1, 3), 16),
-    g: parseInt(hex.slice(3, 5), 16),
-    b: parseInt(hex.slice(5, 7), 16),
-  };
-}
-
-function LedColorPicker({ r, g, b, onApplied }) {
-  const [hex,     setHex]     = useState(rgbToHex(r, g, b));
-  const [saving,  setSaving]  = useState(false);
-  const [saved,   setSaved]   = useState(false);
-
-  useEffect(() => { setHex(rgbToHex(r, g, b)); }, [r, g, b]);
-
-  const rgb = hexToRgb(hex);
-
-  const handleApply = async () => {
-    setSaving(true);
-    try {
-      await setLedColor(rgb.r, rgb.g, rgb.b);
-      onApplied(rgb);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (err) {
-      console.error('Failed to set LED color:', err);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="led-color-panel">
-      <div className="led-color-header">
-        <span className="led-color-icon">🎨</span>
-        <div>
-          <div className="led-color-title">LED Strip Color</div>
-          <div className="led-color-sub">Choose the color of the grow light strip</div>
-        </div>
-      </div>
-      <div className="led-color-body">
-        <label className="led-swatch-wrap" title="Click to open color picker">
-          <div className="led-swatch" style={{ background: hex, boxShadow: `0 0 24px ${hex}55` }} />
-          <input type="color" className="led-color-input" value={hex} onChange={e => setHex(e.target.value)} />
-        </label>
-
-        <div className="led-rgb-values">
-          {[['R', rgb.r, '#ff6b6b'], ['G', rgb.g, '#69db7c'], ['B', rgb.b, '#4dabf7']].map(([label, val, color]) => (
-            <div key={label} className="led-rgb-row">
-              <span className="led-rgb-label" style={{ color }}>{label}</span>
-              <span className="led-rgb-val">{val}</span>
-            </div>
-          ))}
-        </div>
-
-        <div className="led-hex-display">{hex.toUpperCase()}</div>
-
-        <button
-          className={`led-apply-btn${saved ? ' led-saved' : ''}`}
-          onClick={handleApply}
-          disabled={saving}
-        >
-          {saving ? '…' : saved ? '✓ Saved' : 'Apply'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export default function StatusView({ latest, state, plant, onStateChange, loading, mode, onModeChange }) {
   const [pumpDuration, setPumpDuration] = useState(10);
   // Pull sensor values directly from the latest log row
@@ -189,11 +116,6 @@ export default function StatusView({ latest, state, plant, onStateChange, loadin
           <span>1s</span><span>10s</span><span>20s</span><span>30s</span>
         </div>
       </div>
-
-      <LedColorPicker
-        r={state.led_r ?? 255} g={state.led_g ?? 255} b={state.led_b ?? 0}
-        onApplied={rgb => onStateChange(s => ({ ...s, led_r: rgb.r, led_g: rgb.g, led_b: rgb.b }))}
-      />
 
       <h2 className="section-title">Sensors</h2>
       <div className="sensor-grid">

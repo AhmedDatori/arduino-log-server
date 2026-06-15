@@ -5,9 +5,6 @@ const DEFAULT_ACTUATOR_STATE = {
   pump: false,
   buzzer: false,
   fan: false,
-  led_r: 255,
-  led_g: 255,
-  led_b: 0,
 };
 
 function toNumberOrNull(value) {
@@ -38,7 +35,7 @@ function parseSensorMessage(message) {
 function createGreenhouseState(pool) {
   async function getActuatorState() {
     const { rows } = await pool.query(
-      'SELECT light, pump, buzzer, fan, led_r, led_g, led_b, pump_off_at FROM actuator_state WHERE id = 1'
+      'SELECT light, pump, buzzer, fan, pump_off_at FROM actuator_state WHERE id = 1'
     );
 
     if (!rows.length) return { ...DEFAULT_ACTUATOR_STATE };
@@ -55,9 +52,6 @@ function createGreenhouseState(pool) {
       pump: state.pump,
       buzzer: state.buzzer,
       fan: state.fan ?? false,
-      led_r: state.led_r ?? 255,
-      led_g: state.led_g ?? 255,
-      led_b: state.led_b ?? 0,
     };
   }
 

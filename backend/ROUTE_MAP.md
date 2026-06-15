@@ -7,7 +7,7 @@ This file explains which backend file owns each part of the greenhouse system.
 - `routes/sensorAndControlRoutes.js`
   - Receives ESP32 sensor logs with `POST /log`.
   - Returns recent logs with `GET /api/logs`.
-  - Stores and returns actuator state with `/api/state`, `/api/control`, and `/api/led-color`.
+  - Stores and returns actuator state with `/api/state` and `/api/control`.
 
 - `routes/cameraRoutes.js`
   - Receives ESP32-CAM frames with `POST /camera/frame`.

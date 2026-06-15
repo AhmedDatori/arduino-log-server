@@ -41,9 +41,9 @@ async function initDB() {
   `);
   await pool.query(`INSERT INTO actuator_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
   await pool.query('ALTER TABLE actuator_state ADD COLUMN IF NOT EXISTS fan BOOLEAN NOT NULL DEFAULT FALSE').catch(() => {});
-  await pool.query('ALTER TABLE actuator_state ADD COLUMN IF NOT EXISTS led_r INT NOT NULL DEFAULT 255').catch(() => {});
-  await pool.query('ALTER TABLE actuator_state ADD COLUMN IF NOT EXISTS led_g INT NOT NULL DEFAULT 255').catch(() => {});
-  await pool.query('ALTER TABLE actuator_state ADD COLUMN IF NOT EXISTS led_b INT NOT NULL DEFAULT 0').catch(() => {});
+  await pool.query('ALTER TABLE actuator_state DROP COLUMN IF EXISTS led_r').catch(() => {});
+  await pool.query('ALTER TABLE actuator_state DROP COLUMN IF EXISTS led_g').catch(() => {});
+  await pool.query('ALTER TABLE actuator_state DROP COLUMN IF EXISTS led_b').catch(() => {});
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS conversations (
